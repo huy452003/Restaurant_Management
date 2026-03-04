@@ -23,7 +23,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-
+import org.springframework.data.redis.core.RedisTemplate;
 
 import jakarta.persistence.criteria.Predicate;
 
@@ -47,6 +47,7 @@ import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
 import com.security.configurations.JwtConfig;
+import com.security.services.BlackListService;
 import com.security.services.JwtService;
 
 @Service
@@ -65,6 +66,10 @@ public class UserServiceImp implements UserService {
     private AuthenticationManager authenticationManager;
     @Autowired
     private PasswordEncoder passwordEncoder;
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
+    @Autowired
+    private BlackListService blackListService;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds){
         return LogContext.builder()
@@ -74,6 +79,8 @@ public class UserServiceImp implements UserService {
             .userIds(userIds)
             .build();
     }
+
+    private static final String USER_REDIS_KEY_PREFIX = "user:";
 
     private String formatExpirationTime(Long jwtExpirationTime){
         LocalDateTime expirationTime = LocalDateTime.now().plusSeconds(jwtExpirationTime / 1000);
@@ -87,12 +94,25 @@ public class UserServiceImp implements UserService {
         LogContext logContext = getLogContext("getAll", Collections.emptyList());
         log.logInfo("Getting all users ...!", logContext);
 
+        // lấy cache từ redis nếu có
+        String redisKeyGetAllUsers = USER_REDIS_KEY_PREFIX + "getAllUsers";
+        List<UserModel> cachedUsers = (List<UserModel>) redisTemplate.opsForValue().get(redisKeyGetAllUsers);
+        if(cachedUsers != null && !cachedUsers.isEmpty()) {
+            log.logInfo("completed, found " + cachedUsers.size() + " users in cache", logContext);
+            return cachedUsers;
+        }
+        log.logInfo("Not found users in cache, query from database", logContext);
+
+        // query từ db
         List<UserEntity> userEntities = userRepository.findAll();
         if(userEntities == null || userEntities.isEmpty()){
             NotFoundExceptionHandle e = new NotFoundExceptionHandle("No users found", Collections.emptyList(), "userModel");
             log.logError("threw an exception", e, logContext);
             throw e;
         }
+        // lưu cache vào redis
+        redisTemplate.opsForValue().set(redisKeyGetAllUsers, userEntities);
+        log.logInfo("cached " + userEntities.size() + " users in key: " + redisKeyGetAllUsers, logContext);
         log.logInfo("completed, found " + userEntities.size() + " users", logContext);
         return userEntities.stream().map(
             userEntity -> {
@@ -165,6 +185,7 @@ public class UserServiceImp implements UserService {
             throw e;
         }
 
+        // query từ db
         List<UserEntity> userEntities = registers.stream().map(register -> {
             UserEntity userEntity = modelMapper.map(register, UserEntity.class);
             userEntity.setPassword(passwordEncoder.encode(register.getPassword()));
@@ -174,11 +195,15 @@ public class UserServiceImp implements UserService {
             return userEntity;
         }).collect(Collectors.toList());
     
-        userRepository.saveAll(userEntities);
-        log.logInfo("completed, created " + userEntities.size() + " users with PENDING status", logContext);
-        
+        userRepository.saveAll(userEntities);   
+
         // TODO: Gửi email/OTP xác thực ở đây
-        
+
+        // xóa cache
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
+        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
+        log.logInfo("completed, created " + userEntities.size() + " users with PENDING status", logContext);
         return userEntities.stream().map(userEntity -> {
             UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
             Map<String, Object> claims = new HashMap<>();
@@ -205,6 +230,7 @@ public class UserServiceImp implements UserService {
             new UsernamePasswordAuthenticationToken(req.getUsername(), req.getPassword())
         );
 
+        // query từ db
         UserEntity userEntity = userRepository.findByUsername(req.getUsername()).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
                 "User not found with username: " + req.getUsername() + "when login",
@@ -225,16 +251,17 @@ public class UserServiceImp implements UserService {
             log.logError(e.getMessage(), null, logContext);
             throw e;
         }
-        if(userEntity.getUserStatus() == UserStatus.PENDING){
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "User is pending",
-                "UserSecurityModel",
-                "userStatus must be ACTIVE"
-            );
-            log.logError(e.getMessage(), null, logContext);
-            throw e;
-        }
+        // if(userEntity.getUserStatus() == UserStatus.PENDING){
+        //     ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+        //         "User is pending",
+        //         "UserSecurityModel",
+        //         "userStatus must be ACTIVE"
+        //     );
+        //     log.logError(e.getMessage(), null, logContext);
+        //     throw e;
+        // }
         
+        // trả response với tokens
         UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
         Map<String, Object> claim = new HashMap<>();
         claim.put("role", userEntity.getRole().name());
@@ -247,6 +274,28 @@ public class UserServiceImp implements UserService {
         }
         log.logInfo("completed, logged in user: " + userEntity.getUsername(), logContext);
         return userSecurityModel;
+    }
+
+    // logout
+    @Override
+    public void logout(String username) {
+        LogContext logContext = getLogContext("logout", Collections.emptyList());
+        log.logInfo("User is logging out ...!", logContext);
+
+        // kiểm tra username có tồn tại trong db không
+        UserEntity foundUser = userRepository.findByUsername(username).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Not found user with username: " + username,
+                 Collections.emptyList(),
+                 "userModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            return e;
+        });
+
+        // thêm token vào blacklist (revoke token)
+        blackListService.blackListUser(foundUser.getUsername());
+        log.logInfo("Completed, logged out user: " + foundUser.getUsername() + " and blacklisted token", logContext);
     }
 
     // update user normal
@@ -353,7 +402,11 @@ public class UserServiceImp implements UserService {
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
         }
-        
+
+        // xóa cache
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
+        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
         // Return tất cả users (bao gồm cả những user không có thay đổi)
         return foundUsers.stream().map(userEntity -> {
             UserModel userModel = modelMapper.map(userEntity, UserModel.class);
@@ -493,7 +546,11 @@ public class UserServiceImp implements UserService {
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
         }
-        
+
+        // xóa cache
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
+        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
         // Return tất cả users (bao gồm cả những user không có thay đổi)
         return foundUsers.stream().map(userEntity -> {
                 UserModel userModel = modelMapper.map(userEntity, UserModel.class);
@@ -516,7 +573,16 @@ public class UserServiceImp implements UserService {
         LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("Filtering users with pagination ...!", logContext);
 
-        // Build conditions map
+        // lấy cache từ redis nếu có
+        String redisKeyFilters = USER_REDIS_KEY_PREFIX + "filters";
+        Page<UserModel> cachedPage = (Page<UserModel>) redisTemplate.opsForValue().get(redisKeyFilters);
+        if(cachedPage != null && !cachedPage.isEmpty()){
+            log.logInfo("completed, found " + cachedPage.getTotalElements() + " users in cache", logContext);
+            return cachedPage;
+        }
+        log.logInfo("not found users in cache, query from database", logContext);
+
+        // tạo map conditions để query theo các điều kiện hợp lệ
         Map<String, Object> conditions = new HashMap<>();
 
         if(id != null && id > 0){
@@ -598,7 +664,9 @@ public class UserServiceImp implements UserService {
             pageEntities.getPageable(),     // pageable (để lấy số trang hiện tại, số phần tử mỗi trang)
             pageEntities.getTotalElements() // total elements (để lấy tổng số phần tử)
         );
-        
+        // lưu cache vào redis
+        redisTemplate.opsForValue().set(redisKeyFilters, userModelPage);
+        log.logInfo("cached " + userModelPage.getTotalElements() + " users in key: " + redisKeyFilters, logContext);
         log.logInfo("completed, found " + userModelPage.getTotalElements() + " users in " + 
                     userModelPage.getTotalPages() + " pages", logContext);
         return userModelPage;

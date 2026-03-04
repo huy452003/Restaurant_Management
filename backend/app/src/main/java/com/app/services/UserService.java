@@ -20,6 +20,7 @@ public interface UserService {
     List<UserModel> getAll();
     List<UserSecurityModel> creates(List<RegisterModel> registers);
     UserSecurityModel login(LoginModel req);
+    void logout(String username);
     List<UserModel> updatesNormal(List<UpdateUserNormalModel> updates, List<Integer> userIds);
     List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds);
     Page<UserModel> filters(

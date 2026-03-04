@@ -36,10 +36,10 @@ import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.models.Response;
-import com.common.models.wrapperModel.UpdateUserNormalRequest;
-import com.common.models.wrapperModel.UpdateUserForAdminRequest;
 import com.common.models.security.LoginModel;
 import com.common.models.security.UserSecurityModel;
+import com.common.models.wrapper.UpdateUserForAdminRequest;
+import com.common.models.wrapper.UpdateUserNormalRequest;
 
 
 @RestController
@@ -126,6 +126,29 @@ public class UserController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Response<String>> logout(
+        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
+        @RequestParam String username
+    ) {
+        Locale locale = Locale.forLanguageTag(acceptLanguage);
+        LogContext logContext = getLogContext("logout", Collections.emptyList());
+        log.logInfo("is running, preparing to call service ...!", logContext);
+
+        userService.logout(username);
+        
+        Response<String> response = new Response<>(
+            200,
+            messageSource.getMessage("response.message.logoutSuccess", null, locale),
+            "userModel",
+            null,
+            "username: " + username
+        );
+        log.logInfo("completed, returning response ...!", logContext);
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+    
 
     // update users - user tự update (authenticated users)
     @PatchMapping()

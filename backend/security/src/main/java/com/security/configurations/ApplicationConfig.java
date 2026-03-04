@@ -14,7 +14,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.client.RestTemplate;
 
 @Configuration
-@PropertySource(value = "classpath:applicaiton.properties", ignoreResourceNotFound = true)
 @EnableConfigurationProperties(JwtConfig.class)
 public class ApplicationConfig {
 

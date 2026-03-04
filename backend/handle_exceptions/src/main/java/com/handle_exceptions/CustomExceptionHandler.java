@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
 import java.util.ArrayList;
 import org.springframework.core.annotation.Order;
 
@@ -147,7 +148,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             409,
             messageSource.getMessage("response.error.conflictError", null, locale),
-            "userModel",
+            "ExceptionHandle",
             errors,
             null
         );
@@ -201,7 +202,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             400,
             messageSource.getMessage("response.error.validateFailed", null, locale),
-            null,
+            "ExceptionHandle",
             errors,
             null
         );
@@ -235,7 +236,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             400,
             messageSource.getMessage("response.error.validateFailed", null, locale),
-            e.getModelName() != null ? e.getModelName() : "Request-Model",
+            e.getModelName() != null ? e.getModelName() : "ExceptionHandle",
             errors,
             null
         );
@@ -279,7 +280,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             400,
             messageSource.getMessage("response.error.validateFailed", null, locale),
-            "Request-Model",
+            "ExceptionHandle",
             errors,
             null
         );
@@ -298,7 +299,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             401,
             messageSource.getMessage("response.error.unauthorizedError", null, locale),
-            e.getModelName() != null ? e.getModelName() : "Request-Model",
+            e.getModelName(),
             errors,
             null
         );
@@ -320,7 +321,28 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
             403,
             messageSource.getMessage("response.error.forbiddenError", null, locale),
-            e.getModelName() != null ? e.getModelName() : "Request-Model",
+            e.getModelName(),
+            errors,
+            null
+        );
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
+    // Access Denied Exception Handler (Spring Security - khi user không có quyền truy cập)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<Response<?>> accessDeniedExceptionHandle(AccessDeniedException e) {
+        Locale locale = LocaleContextHolder.getLocale();
+
+        Map<String, Object> errors = new HashMap<>();
+        errors.put(
+            "Error", e.getMessage() + " :You are not authorized to access this resource"
+        );
+
+        Response<?> response = new Response<>(
+            403,
+            messageSource.getMessage("response.error.forbiddenError", null, locale),
+            "ExceptionHandle",
             errors,
             null
         );
@@ -386,7 +408,7 @@ public class CustomExceptionHandler {
         Response<?> response = new Response<>(
                 500,
                 messageSource.getMessage("response.error.internalServerError", null, locale),
-                "Exception",
+                "ExceptionHandle",
                 error,
                 null
         );

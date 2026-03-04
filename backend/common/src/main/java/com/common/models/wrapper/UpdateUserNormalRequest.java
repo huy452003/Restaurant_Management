@@ -1,4 +1,4 @@
-package com.common.models.wrapperModel;
+package com.common.models.wrapper;
 
 import java.util.List;
 

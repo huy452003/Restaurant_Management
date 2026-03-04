@@ -26,6 +26,7 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/users/register",
                     "/users/login",
+                    "/users/logout",
                     "/users/public/**"
                 ).permitAll()
                 .anyRequest().authenticated()
