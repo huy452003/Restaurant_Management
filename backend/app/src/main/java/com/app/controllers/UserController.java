@@ -40,7 +40,9 @@ import com.common.models.security.LoginModel;
 import com.common.models.security.UserSecurityModel;
 import com.common.models.wrapper.UpdateUserForAdminRequest;
 import com.common.models.wrapper.UpdateUserNormalRequest;
+import com.handle_exceptions.TooManyRequestsExceptionHandle;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 
 @RestController
 @RequestMapping("/users")
@@ -64,6 +66,7 @@ public class UserController {
     // get all users - chỉ ADMIN và MANAGER
     @GetMapping()
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "getAllFallback")
     public ResponseEntity<Response<List<UserModel>>> getAll(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage
     ) {
@@ -83,30 +86,9 @@ public class UserController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-    // create users
-    @PostMapping("/register")
-    public ResponseEntity<Response<List<UserSecurityModel>>> creates(
-        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @RequestBody @Valid List<RegisterModel> registers
-    ) {
-        Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("creates", Collections.emptyList());
-        log.logInfo("is running, preparing to call service ...!", logContext);
-
-        List<UserSecurityModel> createdUsers = userService.creates(registers);
-        Response<List<UserSecurityModel>> response = new Response<>(
-            201,
-            messageSource.getMessage("response.message.createSuccess", null, locale),
-            "UserSecurityModel",
-            null,
-            createdUsers
-        );
-        log.logInfo("completed, returning response ...!", logContext);
-        return ResponseEntity.status(response.statusCode()).body(response);
-    }
-
     // login
     @PostMapping("/login")
+    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "loginFallback")
     public ResponseEntity<Response<UserSecurityModel>> login(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @RequestBody @Valid LoginModel req
@@ -127,8 +109,11 @@ public class UserController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
+    // logout
     @PostMapping("/logout")
+    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "logoutFallback")
     public ResponseEntity<Response<String>> logout(
+
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @RequestParam String username
     ) {
@@ -148,17 +133,43 @@ public class UserController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
-    
 
+    // create users
+    @PostMapping("/register")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "createsFallback")
+    public ResponseEntity<Response<List<UserSecurityModel>>> creates(
+        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
+        @RequestBody @Valid List<RegisterModel> registers
+    ) {
+        Locale locale = Locale.forLanguageTag(acceptLanguage);
+        LogContext logContext = getLogContext("creates", Collections.emptyList());
+        log.logInfo("is running, preparing to call service ...!", logContext);
+
+        List<UserSecurityModel> createdUsers = userService.creates(registers);
+        Response<List<UserSecurityModel>> response = new Response<>(
+            201,
+            messageSource.getMessage("response.message.createSuccess", null, locale),
+            "UserSecurityModel",
+            null,
+            createdUsers
+        );
+        log.logInfo("completed, returning response ...!", logContext);
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+    
     // update users - user tự update (authenticated users)
     @PatchMapping()
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "updatesNormalFallback")
     public ResponseEntity<Response<List<UserModel>>> updatesNormal(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @RequestBody @Valid UpdateUserNormalRequest request
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("updatesNormal", request.getUserIds());
+        LogContext logContext = getLogContext(
+            "updatesNormal", 
+            request != null ? request.getUserIds() : Collections.emptyList()
+        );
         log.logInfo("is running, preparing to call service ...!", logContext);
 
         List<UserModel> updatedUsers = userService.updatesNormal(request.getUpdates(), request.getUserIds());
@@ -176,12 +187,16 @@ public class UserController {
     // update users for admin - chỉ ADMIN
     @PutMapping()
     @PreAuthorize("hasRole('ADMIN')")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "updatesForAdminFallback")
     public ResponseEntity<Response<List<UserModel>>> updatesForAdmin(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @RequestBody @Valid UpdateUserForAdminRequest request
     ){
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("updatesForAdmin", request.getUserIds());
+        LogContext logContext = getLogContext(
+            "updatesForAdmin", 
+            request != null ? request.getUserIds() : Collections.emptyList()
+        );
         log.logInfo("is running, preparing to call service ...!", logContext);
 
         List<UserModel> updatedUsers = userService.updatesForAdmin(request.getUpdates(), request.getUserIds());
@@ -199,6 +214,7 @@ public class UserController {
     // filter and paginate users - chỉ ADMIN và MANAGER
     @GetMapping("/filterAndPaginate")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<UserModel>>> filters(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @RequestParam(required = false) Integer id,
@@ -240,13 +256,17 @@ public class UserController {
     
     // verify and activate user - public
     @PutMapping("/public/{userId}/verify")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "verifyAndActivateFallback")
     public ResponseEntity<Response<UserModel>> verifyAndActivate(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
         @PathVariable Integer userId,
         @RequestParam(required = false) String code
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("verifyAndActivate", Collections.singletonList(userId));
+        LogContext logContext = getLogContext(
+            "verifyAndActivate",
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
+        );
         log.logInfo("is running, preparing to call service ...!", logContext);
 
         // TODO: Nếu chưa có verification code system, có thể bỏ qua code parameter tạm thời
@@ -263,5 +283,141 @@ public class UserController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    //Fallback method *************************************************************//
+
+    // getAllFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<UserModel>>> getAllFallback(
+        String acceptLanguage, Exception e
+    ) {
+        LogContext logContext = getLogContext("getAllFallback", Collections.emptyList());
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for getAll endpoint", 
+            "getAll"
+        );
+        log.logError("getAll controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    // loginFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<UserSecurityModel>> loginFallback(
+        String acceptLanguage, LoginModel req, Exception e
+    ) {
+        LogContext logContext = getLogContext("loginFallback", Collections.emptyList());
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for login endpoint", 
+            "login"
+        );
+        log.logError("login controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    // logoutFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<String>> logoutFallback(
+        String acceptLanguage, String username, Exception e
+    ) {
+        LogContext logContext = getLogContext("logoutFallback", Collections.emptyList());
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for logout endpoint", 
+            "logout"
+        );
+        log.logError("logout controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    // createsFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<UserSecurityModel>>> createsFallback(
+        String acceptLanguage, List<RegisterModel> registers, Exception e
+    ) {
+        LogContext logContext = getLogContext("createsFallback", Collections.emptyList());
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for creates endpoint", 
+            "creates"
+        );
+        log.logError("creates controller is unavailable", error, logContext);
+        throw error;
+    }
+    
+    // updatesNormalFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<UserModel>>> updatesNormalFallback(
+        String acceptLanguage, UpdateUserNormalRequest request, Exception e
+    ) {
+        LogContext logContext = getLogContext(
+            "updatesNormalFallback",
+            request != null ? request.getUserIds() : Collections.emptyList()
+        );
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatesNormal endpoint", 
+            "updatesNormal"
+        );
+        log.logError("updatesNormal controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    // updatesForAdminFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<UserModel>>> updatesForAdminFallback(
+        String acceptLanguage, UpdateUserForAdminRequest request, Exception e
+    ) {
+        LogContext logContext = getLogContext(
+            "updatesForAdminFallback", 
+            request != null ? request.getUserIds() : Collections.emptyList()
+        );
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatesForAdmin endpoint", 
+            "updatesForAdmin"
+        );
+        log.logError("updatesForAdmin controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    // filtersFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<UserModel>>> filtersFallback(
+        String acceptLanguage, Integer id, String username,
+        String fullname, String email, String phone,
+        Gender gender, LocalDate birth, String address,
+        UserRole role, UserStatus userStatus, Pageable pageable, Exception e
+    ){
+        LogContext logContext = getLogContext("filtersFallback", Collections.emptyList());
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for filters endpoint", 
+            "filters"
+        );
+        log.logError("filters controller is unavailable", error, logContext);
+        throw error;
+    }
+    
+    // verifyAndActivateFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<UserModel>> verifyAndActivateFallback(
+        String acceptLanguage, Integer userId, String code, Exception e
+    ) {
+        LogContext logContext = getLogContext(
+            "verifyAndActivateFallback", 
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
+        );
+
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for verifyAndActivate endpoint", 
+            "verifyAndActivate"
+        );
+        log.logError("verifyAndActivate controller is unavailable", error, logContext);
+        throw error;
+    }
+
+    //Fallback method *************************************************************//
 
 }

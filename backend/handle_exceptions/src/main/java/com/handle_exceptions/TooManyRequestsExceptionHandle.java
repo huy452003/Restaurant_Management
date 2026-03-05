@@ -8,12 +8,10 @@ import lombok.ToString;
 @AllArgsConstructor
 @ToString
 public class TooManyRequestsExceptionHandle extends RuntimeException {
-    private final String serviceName;
-    private final Long retryAfter;
+    private final String controllerName;
 
-    public TooManyRequestsExceptionHandle(String message, String serviceName, Long retryAfter) {
+    public TooManyRequestsExceptionHandle(String message, String controllerName) {
         super(message);
-        this.serviceName = serviceName;
-        this.retryAfter = retryAfter;
+        this.controllerName = controllerName;
     }
 }

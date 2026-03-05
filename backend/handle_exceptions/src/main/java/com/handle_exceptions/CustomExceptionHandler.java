@@ -376,24 +376,15 @@ public class CustomExceptionHandler {
 
         Map<String, Object> error = new HashMap<>();
         error.put("Error", e.getMessage());
-        if (e.getRetryAfter() != null) {
-            error.put("RetryAfter", e.getRetryAfter());
-        }
         
         Response<?> response = new Response<>(
                 429,
                 messageSource.getMessage("response.error.tooManyRequests", null, locale),
-                e.getServiceName() != null ? e.getServiceName() : "RateLimit",
+                e.getControllerName() != null ? e.getControllerName() : "RateLimit",
                 error,
                 null
         );
-        
-        ResponseEntity.BodyBuilder responseBuilder = ResponseEntity.status(response.statusCode());
-        if (e.getRetryAfter() != null) {
-            responseBuilder.header("Retry-After", String.valueOf(e.getRetryAfter()));
-        }
-        
-        return responseBuilder.body(response);
+        return ResponseEntity.status(response.statusCode()).body(response);
     }
 
     // Exception Handler

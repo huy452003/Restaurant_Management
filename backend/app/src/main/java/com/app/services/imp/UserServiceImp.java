@@ -15,6 +15,7 @@ import java.util.ArrayList;
 
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -23,7 +24,10 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.criteria.Predicate;
 
@@ -43,12 +47,15 @@ import com.common.models.security.UserSecurityModel;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 import com.handle_exceptions.NotFoundExceptionHandle;
+import com.handle_exceptions.ServiceUnavailableExceptionHandle;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
 import com.security.configurations.JwtConfig;
 import com.security.services.BlackListService;
 import com.security.services.JwtService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 @Service
 public class UserServiceImp implements UserService {
@@ -90,6 +97,7 @@ public class UserServiceImp implements UserService {
 
     // get all users
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "getAllFallback")
     public List<UserModel> getAll() {
         LogContext logContext = getLogContext("getAll", Collections.emptyList());
         log.logInfo("Getting all users ...!", logContext);
@@ -125,8 +133,92 @@ public class UserServiceImp implements UserService {
         ).collect(Collectors.toList());
     }
 
+    // login
+    @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "loginFallback")
+    public UserSecurityModel login(LoginModel req) {
+        LogContext logContext = getLogContext("login", Collections.emptyList());
+        log.logInfo("Logging in user ...!", logContext);
+
+        // xác thực username và password
+        authenticationManager.authenticate(
+            new UsernamePasswordAuthenticationToken(req.getUsername(), req.getPassword())
+        );
+
+        // query từ db
+        UserEntity userEntity = userRepository.findByUsername(req.getUsername()).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "User not found with username: " + req.getUsername() + "when login",
+                Collections.emptyList(),
+                "UserSecurityModel"
+            );
+            log.logError(e.getMessage(), null, logContext);
+            return e;
+        });
+
+        // kiểm tra user status phải là ACTIVE
+        if(userEntity.getUserStatus() == UserStatus.INACTIVE){
+            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+                "User is inactive",
+                "UserSecurityModel",
+                "userStatus must be ACTIVE"
+            );
+            log.logError(e.getMessage(), null, logContext);
+            throw e;
+        }
+        // if(userEntity.getUserStatus() == UserStatus.PENDING){
+        //     ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+        //         "User is pending",
+        //         "UserSecurityModel",
+        //         "userStatus must be ACTIVE"
+        //     );
+        //     log.logError(e.getMessage(), null, logContext);
+        //     throw e;
+        // }
+        
+        // trả response với tokens
+        UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
+        Map<String, Object> claim = new HashMap<>();
+        claim.put("role", userEntity.getRole().name());
+        userSecurityModel.setAccessToken(jwtService.generateAccessToken(claim, userEntity));
+        userSecurityModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
+        userSecurityModel.setRefreshToken(jwtService.generateRefreshToken(claim, userEntity));
+        userSecurityModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
+        if(userEntity.getBirth() != null){
+            userSecurityModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
+        }
+        log.logInfo("completed, logged in user: " + userEntity.getUsername(), logContext);
+        return userSecurityModel;
+    }
+
+    // logout
+    @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "logoutFallback")
+    public void logout(String username) {
+        LogContext logContext = getLogContext("logout", Collections.emptyList());
+        log.logInfo("User is logging out ...!", logContext);
+
+        // kiểm tra username có tồn tại trong db không
+        UserEntity foundUser = userRepository.findByUsername(username).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Not found user with username: " + username,
+                 Collections.emptyList(),
+                 "userModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            return e;
+        });
+
+        // thêm token vào blacklist (revoke token)
+        blackListService.blackListUser(foundUser.getUsername());
+        log.logInfo("Completed, logged out user: " + foundUser.getUsername() + " and blacklisted token", logContext);
+    }
+
     // create users
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "createsFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<UserSecurityModel> creates(List<RegisterModel> registers) {
         LogContext logContext = getLogContext("creates", Collections.emptyList());
         log.logInfo("Creating " + registers.size() + " users ...!", logContext);
@@ -219,89 +311,16 @@ public class UserServiceImp implements UserService {
         }).collect(Collectors.toList());
     }
 
-    // login
-    @Override
-    public UserSecurityModel login(LoginModel req) {
-        LogContext logContext = getLogContext("login", Collections.emptyList());
-        log.logInfo("Logging in user ...!", logContext);
-
-        // xác thực username và password
-        authenticationManager.authenticate(
-            new UsernamePasswordAuthenticationToken(req.getUsername(), req.getPassword())
-        );
-
-        // query từ db
-        UserEntity userEntity = userRepository.findByUsername(req.getUsername()).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "User not found with username: " + req.getUsername() + "when login",
-                Collections.emptyList(),
-                "UserSecurityModel"
-            );
-            log.logError(e.getMessage(), null, logContext);
-            return e;
-        });
-
-        // kiểm tra user status phải là ACTIVE
-        if(userEntity.getUserStatus() == UserStatus.INACTIVE){
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "User is inactive",
-                "UserSecurityModel",
-                "userStatus must be ACTIVE"
-            );
-            log.logError(e.getMessage(), null, logContext);
-            throw e;
-        }
-        // if(userEntity.getUserStatus() == UserStatus.PENDING){
-        //     ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-        //         "User is pending",
-        //         "UserSecurityModel",
-        //         "userStatus must be ACTIVE"
-        //     );
-        //     log.logError(e.getMessage(), null, logContext);
-        //     throw e;
-        // }
-        
-        // trả response với tokens
-        UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
-        Map<String, Object> claim = new HashMap<>();
-        claim.put("role", userEntity.getRole().name());
-        userSecurityModel.setAccessToken(jwtService.generateAccessToken(claim, userEntity));
-        userSecurityModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
-        userSecurityModel.setRefreshToken(jwtService.generateRefreshToken(claim, userEntity));
-        userSecurityModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
-        if(userEntity.getBirth() != null){
-            userSecurityModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-        }
-        log.logInfo("completed, logged in user: " + userEntity.getUsername(), logContext);
-        return userSecurityModel;
-    }
-
-    // logout
-    @Override
-    public void logout(String username) {
-        LogContext logContext = getLogContext("logout", Collections.emptyList());
-        log.logInfo("User is logging out ...!", logContext);
-
-        // kiểm tra username có tồn tại trong db không
-        UserEntity foundUser = userRepository.findByUsername(username).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Not found user with username: " + username,
-                 Collections.emptyList(),
-                 "userModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
-
-        // thêm token vào blacklist (revoke token)
-        blackListService.blackListUser(foundUser.getUsername());
-        log.logInfo("Completed, logged out user: " + foundUser.getUsername() + " and blacklisted token", logContext);
-    }
-
     // update user normal
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatesNormalFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<UserModel> updatesNormal(List<UpdateUserNormalModel> updates, List<Integer> userIds) {
-        LogContext logContext = getLogContext("updatesNormal", userIds);
+        LogContext logContext = getLogContext(
+            "updatesNormal", 
+            userIds != null ? userIds : Collections.emptyList()
+        );
         log.logInfo("Updating " + updates.size() + " users ...!", logContext);
 
         // kiểm tra số lượng updates phải bằng số lượng userIds
@@ -419,8 +438,14 @@ public class UserServiceImp implements UserService {
 
     // update user for admin
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatesForAdminFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds) {
-        LogContext logContext = getLogContext("updatesForAdmin", userIds);
+        LogContext logContext = getLogContext(
+            "updatesForAdmin", 
+            userIds != null ? userIds : Collections.emptyList()
+        );
         log.logInfo("Updating User from admin ...!", logContext);
 
         // kiểm tra số lượng updates phải bằng số lượng userIds
@@ -564,6 +589,7 @@ public class UserServiceImp implements UserService {
 
     // filter users with pagination
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "filtersFallback")
     public Page<UserModel> filters(
         Integer id, String username, String fullname,
         String email, String phone, Gender gender,
@@ -672,50 +698,16 @@ public class UserServiceImp implements UserService {
         return userModelPage;
     }
 
-    // build specification từ map conditions để có thể query theo các điều kiện hợp lệ
-    private Specification<UserEntity> buildSpecificationFromConditions(Map<String, Object> conditions) {
-        return (root, query, criteriaBuilder) -> {
-            List<Predicate> predicates = new ArrayList<>();
-
-            conditions.forEach((field, value) -> {
-                if (value == null) {
-                    return;
-                }
-
-                switch (field) {
-                    case "id":
-                        predicates.add(criteriaBuilder.equal(root.get("id"), value));
-                        break;
-                    case "username":
-                    case "fullname":
-                    case "email":
-                    case "phone":
-                    case "address":
-                        String searchValue = "%" + ((String) value).toLowerCase().trim() + "%";
-                        predicates.add(criteriaBuilder.like( criteriaBuilder.lower(root.get(field)),searchValue));
-                        break;
-                    case "gender":
-                        predicates.add(criteriaBuilder.equal(root.get("gender"), value));
-                        break;
-                    case "birth":
-                        predicates.add(criteriaBuilder.equal(root.get("birth"), value));
-                        break;
-                    case "role":
-                        predicates.add(criteriaBuilder.equal(root.get("role"), value));
-                        break;
-                    case "userStatus":
-                        predicates.add(criteriaBuilder.equal(root.get("userStatus"), value));
-                        break;
-                }
-            });
-            return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
-        };
-    }
-
     // verify and activate user
     @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "verifyAndActivateFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel verifyAndActivate(Integer userId, String verificationCode) {
-        LogContext logContext = getLogContext("verifyAndActivate", Collections.singletonList(userId));
+        LogContext logContext = getLogContext(
+            "verifyAndActivate", 
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
+        );
         log.logInfo("Verifying user with code ...!", logContext);
 
         UserEntity userEntity = userRepository.findById(userId)
@@ -757,6 +749,183 @@ public class UserServiceImp implements UserService {
         }
         return userModel;
     }
+
+    // build specification từ map conditions để có thể query theo các điều kiện hợp lệ
+    private Specification<UserEntity> buildSpecificationFromConditions(Map<String, Object> conditions) {
+        return (root, query, criteriaBuilder) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            conditions.forEach((field, value) -> {
+                if (value == null) {
+                    return;
+                }
+
+                switch (field) {
+                    case "id":
+                        predicates.add(criteriaBuilder.equal(root.get("id"), value));
+                        break;
+                    case "username":
+                    case "fullname":
+                    case "email":
+                    case "phone":
+                    case "address":
+                        String searchValue = "%" + ((String) value).toLowerCase().trim() + "%";
+                        predicates.add(criteriaBuilder.like( criteriaBuilder.lower(root.get(field)),searchValue));
+                        break;
+                    case "gender":
+                        predicates.add(criteriaBuilder.equal(root.get("gender"), value));
+                        break;
+                    case "birth":
+                        predicates.add(criteriaBuilder.equal(root.get("birth"), value));
+                        break;
+                    case "role":
+                        predicates.add(criteriaBuilder.equal(root.get("role"), value));
+                        break;
+                    case "userStatus":
+                        predicates.add(criteriaBuilder.equal(root.get("userStatus"), value));
+                        break;
+                }
+            });
+            return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    //Fallback method *************************************************************//
+
+    // getAllFallback
+    @SuppressWarnings("unused")
+    private List<UserModel> getAllFallback(Exception e) {
+        LogContext logContext = getLogContext("getAllFallback", Collections.emptyList());
+        String redisKeyGetAllUsers = USER_REDIS_KEY_PREFIX + "getAllUsers";
+        List<UserModel> cachedUsers = (List<UserModel>) redisTemplate.opsForValue().get(redisKeyGetAllUsers);
+        if(cachedUsers != null && !cachedUsers.isEmpty()) {
+            log.logDebug("Found cached users when calling getAllFallback", logContext);
+            return cachedUsers;
+        }
+        log.logDebug("Not found cached users when calling getAllFallback", logContext);
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for getAll service", 
+            "getAll"
+        );
+        log.logError("getAll service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // loginFallback
+    @SuppressWarnings("unused")
+    private UserSecurityModel loginFallback(
+        LoginModel req, Exception e
+    ) {
+        LogContext logContext = getLogContext("loginFallback", Collections.emptyList());
+        
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for login service", 
+            "login"
+        );
+        log.logError("login service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // logoutFallback
+    @SuppressWarnings("unused")
+    private void logoutFallback(
+        String username, Exception e
+    ) {
+        LogContext logContext = getLogContext("logoutFallback", Collections.emptyList());
+       
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for logout service", 
+            "logout"
+        );
+        log.logError("logout service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // createsFallback
+    @SuppressWarnings("unused")
+    private List<UserSecurityModel> createsFallback(
+        List<RegisterModel> registers, Exception e
+    ) {
+        LogContext logContext = getLogContext("createsFallback", Collections.emptyList());
+        
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for creates service", 
+            "creates"
+        );
+        log.logError("creates service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // updatesNormalFallback
+    @SuppressWarnings("unused")
+    private List<UserModel> updatesNormalFallback(
+        List<UpdateUserNormalModel> updates, List<Integer> userIds, Exception e
+    ) {
+        LogContext logContext = getLogContext("updatesNormalFallback", Collections.emptyList());
+        
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesNormal service", 
+            "updatesNormal"
+        );
+        log.logError("updatesNormal service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // updatesForAdminFallback
+    @SuppressWarnings("unused")
+    private List<UserModel> updatesForAdminFallback(
+        List<UpdateUserForAdminModel> updates, List<Integer> userIds, Exception e
+    ) {
+        LogContext logContext = getLogContext("updatesForAdminFallback", Collections.emptyList());
+        
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesForAdmin service", 
+            "updatesForAdmin"
+        );
+        log.logError("updatesForAdmin service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // filtersFallback
+    @SuppressWarnings("unused")
+    private Page<UserModel> filtersFallback(
+        Integer id, String username, String fullname,
+        String email, String phone, Gender gender,
+        LocalDate birth, String address, UserRole role, UserStatus userStatus,
+        Pageable pageable, Exception e
+    ) {
+        LogContext logContext = getLogContext("filtersFallback", Collections.emptyList());
+        String redisKeyFilters = USER_REDIS_KEY_PREFIX + "filters";
+        Page<UserModel> cachedPage = (Page<UserModel>) redisTemplate.opsForValue().get(redisKeyFilters);
+        if(cachedPage != null && !cachedPage.isEmpty()) {
+            log.logDebug("Found cached page when calling filtersFallback", logContext);
+            return cachedPage;
+        }
+        log.logDebug("Not found cached page when calling filtersFallback", logContext);
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
+            "filters"
+        );
+        log.logError("filters service is unavailable", error, logContext);
+        throw error;
+    }
+
+    // verifyAndActivateFallback
+    @SuppressWarnings("unused")
+    private UserModel verifyAndActivateFallback(
+        Integer userId, String verificationCode, Exception e
+) {
+        LogContext logContext = getLogContext("verifyAndActivateFallback", Collections.emptyList());
+
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e.getMessage() != null ? e.getMessage() : "Circuit breaker for verifyAndActivate service", 
+            "verifyAndActivate"
+        );
+        log.logError("verifyAndActivate service is unavailable", error, logContext);
+        throw error;
+    }
+
+    //Fallback method *************************************************************//
 
 
 }
