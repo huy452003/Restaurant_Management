@@ -21,7 +21,7 @@ public interface UserService {
     List<UserSecurityModel> creates(List<RegisterModel> registers);
     UserSecurityModel login(LoginModel req);
     void logout(String username);
-    List<UserModel> updatesNormal(List<UpdateUserNormalModel> updates, List<Integer> userIds);
+    UserModel updateNormal(UpdateUserNormalModel update, Integer userId);
     List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds);
     Page<UserModel> filters(
         Integer id, String username, String fullname,
@@ -29,5 +29,5 @@ public interface UserService {
         LocalDate birth, String address, UserRole role, UserStatus userStatus,
         Pageable pageable
     );
-    UserModel verifyAndActivate(Integer userId, String verificationCode);
+    UserModel verifyAndActivate(String verificationToken);
 }

@@ -51,6 +51,7 @@ import com.handle_exceptions.ServiceUnavailableExceptionHandle;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.UnauthorizedExceptionHandle;
 import com.security.configurations.JwtConfig;
 import com.security.services.BlackListService;
 import com.security.services.JwtService;
@@ -118,19 +119,23 @@ public class UserServiceImp implements UserService {
             log.logError("threw an exception", e, logContext);
             throw e;
         }
-        // lưu cache vào redis
-        redisTemplate.opsForValue().set(redisKeyGetAllUsers, userEntities);
-        log.logInfo("cached " + userEntities.size() + " users in key: " + redisKeyGetAllUsers, logContext);
-        log.logInfo("completed, found " + userEntities.size() + " users", logContext);
-        return userEntities.stream().map(
+        
+        // Map từ Entity sang Model trước khi lưu cache
+        List<UserModel> userModels = userEntities.stream().map(
             userEntity -> {
-            UserModel userModel = modelMapper.map(userEntity, UserModel.class);
+                UserModel userModel = modelMapper.map(userEntity, UserModel.class);
                 if(userEntity.getBirth() != null){
                     userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
                 }
                 return userModel;
             }
         ).collect(Collectors.toList());
+        
+        // lưu cache vào redis
+        redisTemplate.opsForValue().set(redisKeyGetAllUsers, userModels);
+        log.logInfo("cached " + userModels.size() + " users in key: " + redisKeyGetAllUsers, logContext);
+        log.logInfo("completed, found " + userModels.size() + " users", logContext);
+        return userModels;
     }
 
     // login
@@ -166,15 +171,15 @@ public class UserServiceImp implements UserService {
             log.logError(e.getMessage(), null, logContext);
             throw e;
         }
-        // if(userEntity.getUserStatus() == UserStatus.PENDING){
-        //     ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-        //         "User is pending",
-        //         "UserSecurityModel",
-        //         "userStatus must be ACTIVE"
-        //     );
-        //     log.logError(e.getMessage(), null, logContext);
-        //     throw e;
-        // }
+        if(userEntity.getUserStatus() == UserStatus.PENDING){
+            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+                "User is pending",
+                "UserSecurityModel",
+                "userStatus must be ACTIVE"
+            );
+            log.logError(e.getMessage(), null, logContext);
+            throw e;
+        }
         
         // trả response với tokens
         UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
@@ -289,8 +294,6 @@ public class UserServiceImp implements UserService {
     
         userRepository.saveAll(userEntities);   
 
-        // TODO: Gửi email/OTP xác thực ở đây
-
         // xóa cache
         redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
         redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
@@ -304,6 +307,8 @@ public class UserServiceImp implements UserService {
             userSecurityModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
             userSecurityModel.setRefreshToken(jwtService.generateRefreshToken(claims, userEntity));
             userSecurityModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
+            userSecurityModel.setVerificationToken(jwtService.generateVeruficationToken(userEntity.getId()));
+            userSecurityModel.setVerificationTokenExpires(formatExpirationTime(86400000L));
             if (userEntity.getBirth() != null) {
                 userSecurityModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
             }
@@ -311,75 +316,58 @@ public class UserServiceImp implements UserService {
         }).collect(Collectors.toList());
     }
 
-    // update user normal
+    // update user normal - user tự update thông tin của chính mình
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatesNormalFallback")
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updateNormalFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
-    public List<UserModel> updatesNormal(List<UpdateUserNormalModel> updates, List<Integer> userIds) {
+    public UserModel updateNormal(UpdateUserNormalModel update, Integer userId) {
         LogContext logContext = getLogContext(
-            "updatesNormal", 
-            userIds != null ? userIds : Collections.emptyList()
-        );
-        log.logInfo("Updating " + updates.size() + " users ...!", logContext);
+            "updateNormal", 
+            Collections.singletonList(userId)
+        );       
+        log.logInfo("User with id " + userId + " is updating their profile ...!", logContext);
 
-        // kiểm tra số lượng updates phải bằng số lượng userIds
-        if (updates.size() != userIds.size()) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "Number of updates must match number of user IDs",
-                userIds,
+        // Tìm user từ userId
+        UserEntity currentUser = userRepository.findById(userId).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "User not found with id: " + userId,
+                Collections.singletonList(userId),
                 "userModel"
             );
-            log.logError("Size mismatch between updates and userIds", e, logContext);
-            throw e;
-        }
+            log.logError("User not found", e, logContext);
+            return e;
+        });
 
-        // tìm các user có trong userIds
-        List<UserEntity> foundUsers = userIds.stream().map(id -> 
-            userRepository.findById(id).orElseThrow(() -> {
-                NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                    "User not found with id: " + id,
-                    Collections.singletonList(id),
-                    "userModel"
-                );
-                log.logError("User not found", e, logContext);
-                return e;
-            })
-        ).collect(Collectors.toList());
-
-        // kiểm tra trùng lặp trước khi cập nhật
+        // Normalize email
+        update.setEmail(update.getEmail().toLowerCase().trim());
+        
+        // Kiểm tra trùng lặp trước khi cập nhật
         List<Object> conflicts = new ArrayList<>();
-        for (int i = 0; i < updates.size(); i++) {
-            UpdateUserNormalModel update = updates.get(i);
-            UserEntity currentUser = foundUsers.get(i);
-            
-            // Normalize email
-            update.setEmail(update.getEmail().toLowerCase().trim());
-            
-            // Check email: CHỈ check duplicate khi email THAY ĐỔI (khác với email hiện tại)
-            if (!update.getEmail().equals(currentUser.getEmail())) {
-                if (userRepository.existsByEmail(update.getEmail())) {
-                    Map<String, Object> conflict = new HashMap<>();
-                    conflict.put("field", "email");
-                    conflict.put("value", update.getEmail());
-                    conflict.put("message", "Email already exists for another user");
-                    conflicts.add(conflict);
-                }
+        
+        // Check email: CHỈ check duplicate khi email THAY ĐỔI (khác với email hiện tại)
+        if (!update.getEmail().equals(currentUser.getEmail())) {
+            if (userRepository.existsByEmail(update.getEmail())) {
+                Map<String, Object> conflict = new HashMap<>();
+                conflict.put("field", "email");
+                conflict.put("value", update.getEmail());
+                conflict.put("message", "Email already exists for another user");
+                conflicts.add(conflict);
             }
-            
-            // Check phone: CHỈ check duplicate khi phone THAY ĐỔI (khác với phone hiện tại)
-            if (!update.getPhone().equals(currentUser.getPhone())) {
-                if (userRepository.existsByPhone(update.getPhone())) {
-                    Map<String, Object> conflict = new HashMap<>();
-                    conflict.put("field", "phone");
-                    conflict.put("value", update.getPhone());
-                    conflict.put("message", "Phone already exists for another user");
-                    conflicts.add(conflict);
-                }
+        }
+        
+        // Check phone: CHỈ check duplicate khi phone THAY ĐỔI (khác với phone hiện tại)
+        if (!update.getPhone().equals(currentUser.getPhone())) {
+            if (userRepository.existsByPhone(update.getPhone())) {
+                Map<String, Object> conflict = new HashMap<>();
+                conflict.put("field", "phone");
+                conflict.put("value", update.getPhone());
+                conflict.put("message", "Phone already exists for another user");
+                conflicts.add(conflict);
             }
         }
 
-        if(!conflicts.isEmpty()){
+        if (!conflicts.isEmpty()) {
             ConflictExceptionHandle e = new ConflictExceptionHandle(
                 "Duplicate unique fields detected",
                 conflicts,
@@ -389,35 +377,19 @@ public class UserServiceImp implements UserService {
             throw e;
         }
 
-        // Map các field từ update model vào UserEntity đã tồn tại (giữ nguyên các field khác)
-        // Chỉ update những user có thay đổi thực sự
-        List<UserEntity> usersToUpdate = new ArrayList<>();
-        Iterator<UpdateUserNormalModel> updateIterator = updates.iterator();
-        Iterator<UserEntity> userIterator = foundUsers.iterator();
+        // Check xem có thay đổi gì không
+        boolean hasChanges = !update.getFullname().equals(currentUser.getFullname()) ||
+                             !update.getEmail().equals(currentUser.getEmail()) ||
+                             !update.getPhone().equals(currentUser.getPhone()) ||
+                             !update.getGender().equals(currentUser.getGender()) ||
+                             !update.getBirth().equals(currentUser.getBirth()) ||
+                             !update.getAddress().equals(currentUser.getAddress());
         
-        while (updateIterator.hasNext() && userIterator.hasNext()) {
-            UpdateUserNormalModel update = updateIterator.next();
-            UserEntity currentUser = userIterator.next();
-            
-            // Check xem có thay đổi gì không
-            boolean hasChanges = !update.getFullname().equals(currentUser.getFullname()) ||
-                                 !update.getEmail().equals(currentUser.getEmail()) ||
-                                 !update.getPhone().equals(currentUser.getPhone()) ||
-                                 !update.getGender().equals(currentUser.getGender()) ||
-                                 !update.getBirth().equals(currentUser.getBirth()) ||
-                                 !update.getAddress().equals(currentUser.getAddress());
-            
-            if (hasChanges) {
-                // Map các field từ update model vào UserEntity
-                modelMapper.map(update, currentUser);
-                usersToUpdate.add(currentUser);
-            }
-        }
-
-        // Chỉ save những user có thay đổi
-        if (!usersToUpdate.isEmpty()) {
-            userRepository.saveAll(usersToUpdate);
-            log.logInfo("completed, updated " + usersToUpdate.size() + " users", logContext);
+        if (hasChanges) {
+            // Map các field từ update model vào UserEntity
+            modelMapper.map(update, currentUser);
+            userRepository.save(currentUser);
+            log.logInfo("completed, updated user with id: " + userId, logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
         }
@@ -426,14 +398,13 @@ public class UserServiceImp implements UserService {
         redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
         redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
         log.logInfo("Deleted cache for getAllUsers and filters", logContext);
-        // Return tất cả users (bao gồm cả những user không có thay đổi)
-        return foundUsers.stream().map(userEntity -> {
-            UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-            if (userEntity.getBirth() != null) {
-                userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-            }
-            return userModel;
-        }).collect(Collectors.toList());
+        
+        // Return user đã update
+        UserModel userModel = modelMapper.map(currentUser, UserModel.class);
+        if (currentUser.getBirth() != null) {
+            userModel.setAge(AgeUtils.calculateAge(currentUser.getBirth()));
+        }
+        return userModel;
     }
 
     // update user for admin
@@ -703,12 +674,13 @@ public class UserServiceImp implements UserService {
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "verifyAndActivateFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
-    public UserModel verifyAndActivate(Integer userId, String verificationCode) {
+    public UserModel verifyAndActivate(String verificationToken) {
+        Integer userId = jwtService.extractUserIdFromVerificationToken(verificationToken);
         LogContext logContext = getLogContext(
             "verifyAndActivate", 
-            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
+            Collections.singletonList(userId)
         );
-        log.logInfo("Verifying user with code ...!", logContext);
+        log.logInfo("Verifying user with verification token ...!", logContext);
 
         UserEntity userEntity = userRepository.findById(userId)
             .orElseThrow(() -> {
@@ -732,14 +704,14 @@ public class UserServiceImp implements UserService {
             throw e;
         }
 
-        // TODO: Verify code (OTP, email token, etc.)
-        // if (!isValidVerificationCode(userId, verificationCode)) {
-        //     throw new ValidationExceptionHandle("Invalid verification code", ...);
-        // }
-
         // Activate user sau khi verify thành công
         userEntity.setUserStatus(UserStatus.ACTIVE);
         userRepository.save(userEntity);
+
+        // xóa cache
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
+        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
+        log.logInfo("Deleted cache for getAllUsers and filters when verify and activate user", logContext);
         
         log.logInfo("User verified and activated successfully", logContext);
         
@@ -795,19 +767,23 @@ public class UserServiceImp implements UserService {
     // getAllFallback
     @SuppressWarnings("unused")
     private List<UserModel> getAllFallback(Exception e) {
-        LogContext logContext = getLogContext("getAllFallback", Collections.emptyList());
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Thử lấy từ cache trước khi throw ServiceUnavailableExceptionHandle
         String redisKeyGetAllUsers = USER_REDIS_KEY_PREFIX + "getAllUsers";
         List<UserModel> cachedUsers = (List<UserModel>) redisTemplate.opsForValue().get(redisKeyGetAllUsers);
         if(cachedUsers != null && !cachedUsers.isEmpty()) {
-            log.logDebug("Found cached users when calling getAllFallback", logContext);
             return cachedUsers;
         }
-        log.logDebug("Not found cached users when calling getAllFallback", logContext);
+        
+        // Service unavailable và không có cache
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for getAll service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for getAll service", 
             "getAll"
         );
-        log.logError("getAll service is unavailable", error, logContext);
         throw error;
     }
 
@@ -816,13 +792,16 @@ public class UserServiceImp implements UserService {
     private UserSecurityModel loginFallback(
         LoginModel req, Exception e
     ) {
-        LogContext logContext = getLogContext("loginFallback", Collections.emptyList());
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
         
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for login service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for login service", 
             "login"
         );
-        log.logError("login service is unavailable", error, logContext);
         throw error;
     }
 
@@ -831,13 +810,16 @@ public class UserServiceImp implements UserService {
     private void logoutFallback(
         String username, Exception e
     ) {
-        LogContext logContext = getLogContext("logoutFallback", Collections.emptyList());
-       
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for logout service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for logout service", 
             "logout"
         );
-        log.logError("logout service is unavailable", error, logContext);
         throw error;
     }
 
@@ -846,28 +828,41 @@ public class UserServiceImp implements UserService {
     private List<UserSecurityModel> createsFallback(
         List<RegisterModel> registers, Exception e
     ) {
-        LogContext logContext = getLogContext("createsFallback", Collections.emptyList());
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
         
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for creates service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for creates service", 
             "creates"
         );
-        log.logError("creates service is unavailable", error, logContext);
         throw error;
     }
 
-    // updatesNormalFallback
+    // updateNormalFallback
     @SuppressWarnings("unused")
-    private List<UserModel> updatesNormalFallback(
-        List<UpdateUserNormalModel> updates, List<Integer> userIds, Exception e
+    private UserModel updateNormalFallback(
+        UpdateUserNormalModel update, Integer userId, Exception e
     ) {
-        LogContext logContext = getLogContext("updatesNormalFallback", Collections.emptyList());
+        // Nếu là business exception (ConflictExceptionHandle, NotFoundExceptionHandle, etc.)
+        // thì re-throw để exception handler xử lý đúng (409, 404, etc.)
+        // Chỉ throw ServiceUnavailableExceptionHandle khi thực sự service unavailable
+        if (e instanceof ConflictExceptionHandle || 
+            e instanceof NotFoundExceptionHandle ||
+            e instanceof ValidationExceptionHandle ||
+            e instanceof ForbiddenExceptionHandle ||
+            e instanceof UnauthorizedExceptionHandle) {
+            throw (RuntimeException) e;
+        }
         
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesNormal service", 
-            "updatesNormal"
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updateNormal service", 
+            "updateNormal"
         );
-        log.logError("updatesNormal service is unavailable", error, logContext);
+        // Không dùng log trong fallback vì private method không được inject dependency
         throw error;
     }
 
@@ -876,13 +871,16 @@ public class UserServiceImp implements UserService {
     private List<UserModel> updatesForAdminFallback(
         List<UpdateUserForAdminModel> updates, List<Integer> userIds, Exception e
     ) {
-        LogContext logContext = getLogContext("updatesForAdminFallback", Collections.emptyList());
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
         
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesForAdmin service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesForAdmin service", 
             "updatesForAdmin"
         );
-        log.logError("updatesForAdmin service is unavailable", error, logContext);
         throw error;
     }
 
@@ -894,38 +892,53 @@ public class UserServiceImp implements UserService {
         LocalDate birth, String address, UserRole role, UserStatus userStatus,
         Pageable pageable, Exception e
     ) {
-        LogContext logContext = getLogContext("filtersFallback", Collections.emptyList());
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Thử lấy từ cache trước khi throw ServiceUnavailableExceptionHandle
         String redisKeyFilters = USER_REDIS_KEY_PREFIX + "filters";
         Page<UserModel> cachedPage = (Page<UserModel>) redisTemplate.opsForValue().get(redisKeyFilters);
         if(cachedPage != null && !cachedPage.isEmpty()) {
-            log.logDebug("Found cached page when calling filtersFallback", logContext);
             return cachedPage;
         }
-        log.logDebug("Not found cached page when calling filtersFallback", logContext);
+        
+        // Service unavailable và không có cache
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
             "filters"
         );
-        log.logError("filters service is unavailable", error, logContext);
         throw error;
     }
 
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
     private UserModel verifyAndActivateFallback(
-        Integer userId, String verificationCode, Exception e
-) {
-        LogContext logContext = getLogContext("verifyAndActivateFallback", Collections.emptyList());
-
+        String verificationToken, Exception e
+    ) {
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Service unavailable hoặc exception khác
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Circuit breaker for verifyAndActivate service", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for verifyAndActivate service", 
             "verifyAndActivate"
         );
-        log.logError("verifyAndActivate service is unavailable", error, logContext);
         throw error;
     }
 
     //Fallback method *************************************************************//
 
+    // Helper method để check business exception
+    private boolean isBusinessException(Exception e) {
+        return e instanceof ConflictExceptionHandle || 
+               e instanceof NotFoundExceptionHandle ||
+               e instanceof ValidationExceptionHandle ||
+               e instanceof ForbiddenExceptionHandle ||
+               e instanceof UnauthorizedExceptionHandle;
+    }
 
 }

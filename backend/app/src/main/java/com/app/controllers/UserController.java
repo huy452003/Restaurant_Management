@@ -18,9 +18,9 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.security.access.prepost.PreAuthorize;
 
 import com.app.services.UserService;
@@ -39,8 +39,13 @@ import com.common.models.Response;
 import com.common.models.security.LoginModel;
 import com.common.models.security.UserSecurityModel;
 import com.common.models.wrapper.UpdateUserForAdminRequest;
-import com.common.models.wrapper.UpdateUserNormalRequest;
+import com.common.models.UpdateUserNormalModel;
 import com.handle_exceptions.TooManyRequestsExceptionHandle;
+import com.handle_exceptions.ConflictExceptionHandle;
+import com.handle_exceptions.NotFoundExceptionHandle;
+import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.ForbiddenExceptionHandle;
+import com.handle_exceptions.UnauthorizedExceptionHandle;
 
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 
@@ -157,28 +162,31 @@ public class UserController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
     
-    // update users - user tự update (authenticated users)
-    @PatchMapping()
+    // update user - user tự update thông tin của chính mình
+    @PatchMapping("{userId}")
     @PreAuthorize("isAuthenticated()")
-    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "updatesNormalFallback")
-    public ResponseEntity<Response<List<UserModel>>> updatesNormal(
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "updateNormalFallback")
+    public ResponseEntity<Response<UserModel>> updateNormal(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @RequestBody @Valid UpdateUserNormalRequest request
+        @RequestBody @Valid UpdateUserNormalModel update,
+        @PathVariable Integer userId
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
+        
         LogContext logContext = getLogContext(
-            "updatesNormal", 
-            request != null ? request.getUserIds() : Collections.emptyList()
+            "updateNormal", 
+            Collections.singletonList(userId)
         );
+
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        List<UserModel> updatedUsers = userService.updatesNormal(request.getUpdates(), request.getUserIds());
-        Response<List<UserModel>> response = new Response<>(
+        UserModel updatedUser = userService.updateNormal(update, userId);
+        Response<UserModel> response = new Response<>(
             200,
             messageSource.getMessage("response.message.updateNormalSuccess", null, locale),
             "userModel",
             null,
-            updatedUsers
+            updatedUser
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
@@ -255,27 +263,20 @@ public class UserController {
     }
     
     // verify and activate user - public
-    @PutMapping("/public/{userId}/verify")
+    @PutMapping("/public/verify")
     @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "verifyAndActivateFallback")
     public ResponseEntity<Response<UserModel>> verifyAndActivate(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @PathVariable Integer userId,
-        @RequestParam(required = false) String code
+        @RequestParam(required = false) String verificationToken
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext(
-            "verifyAndActivate",
-            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("verifyAndActivate", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        // TODO: Nếu chưa có verification code system, có thể bỏ qua code parameter tạm thời
-        String verificationCode = code != null ? code : "default"; // Tạm thời
-        
-        UserModel verifiedUser = userService.verifyAndActivate(userId, verificationCode);
+        UserModel verifiedUser = userService.verifyAndActivate(verificationToken);
         Response<UserModel> response = new Response<>(
             200,
-            messageSource.getMessage("response.message.verifySuccess", new Object[]{"userModel"}, locale),
+            messageSource.getMessage("response.message.verifySuccess", null, locale),
             "userModel",
             null,
             verifiedUser
@@ -291,13 +292,16 @@ public class UserController {
     private ResponseEntity<Response<List<UserModel>>> getAllFallback(
         String acceptLanguage, Exception e
     ) {
-        LogContext logContext = getLogContext("getAllFallback", Collections.emptyList());
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for getAll endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for getAll endpoint", 
             "getAll"
         );
-        log.logError("getAll controller is unavailable", error, logContext);
         throw error;
     }
 
@@ -306,13 +310,16 @@ public class UserController {
     private ResponseEntity<Response<UserSecurityModel>> loginFallback(
         String acceptLanguage, LoginModel req, Exception e
     ) {
-        LogContext logContext = getLogContext("loginFallback", Collections.emptyList());
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for login endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for login endpoint", 
             "login"
         );
-        log.logError("login controller is unavailable", error, logContext);
         throw error;
     }
 
@@ -321,13 +328,16 @@ public class UserController {
     private ResponseEntity<Response<String>> logoutFallback(
         String acceptLanguage, String username, Exception e
     ) {
-        LogContext logContext = getLogContext("logoutFallback", Collections.emptyList());
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for logout endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for logout endpoint", 
             "logout"
         );
-        log.logError("logout controller is unavailable", error, logContext);
         throw error;
     }
 
@@ -336,31 +346,34 @@ public class UserController {
     private ResponseEntity<Response<List<UserSecurityModel>>> createsFallback(
         String acceptLanguage, List<RegisterModel> registers, Exception e
     ) {
-        LogContext logContext = getLogContext("createsFallback", Collections.emptyList());
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for creates endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for creates endpoint", 
             "creates"
         );
-        log.logError("creates controller is unavailable", error, logContext);
         throw error;
     }
     
-    // updatesNormalFallback
+    // updateNormalFallback
     @SuppressWarnings("unused")
-    private ResponseEntity<Response<List<UserModel>>> updatesNormalFallback(
-        String acceptLanguage, UpdateUserNormalRequest request, Exception e
+    private ResponseEntity<Response<UserModel>> updateNormalFallback(
+        String acceptLanguage, UpdateUserNormalModel update, Integer userId, Exception e
     ) {
-        LogContext logContext = getLogContext(
-            "updatesNormalFallback",
-            request != null ? request.getUserIds() : Collections.emptyList()
-        );
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatesNormal endpoint", 
-            "updatesNormal"
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updateNormal endpoint", 
+            "updateNormal"
         );
-        log.logError("updatesNormal controller is unavailable", error, logContext);
         throw error;
     }
 
@@ -369,16 +382,16 @@ public class UserController {
     private ResponseEntity<Response<List<UserModel>>> updatesForAdminFallback(
         String acceptLanguage, UpdateUserForAdminRequest request, Exception e
     ) {
-        LogContext logContext = getLogContext(
-            "updatesForAdminFallback", 
-            request != null ? request.getUserIds() : Collections.emptyList()
-        );
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatesForAdmin endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatesForAdmin endpoint", 
             "updatesForAdmin"
         );
-        log.logError("updatesForAdmin controller is unavailable", error, logContext);
         throw error;
     }
 
@@ -390,34 +403,46 @@ public class UserController {
         Gender gender, LocalDate birth, String address,
         UserRole role, UserStatus userStatus, Pageable pageable, Exception e
     ){
-        LogContext logContext = getLogContext("filtersFallback", Collections.emptyList());
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for filters endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for filters endpoint", 
             "filters"
         );
-        log.logError("filters controller is unavailable", error, logContext);
         throw error;
     }
     
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
     private ResponseEntity<Response<UserModel>> verifyAndActivateFallback(
-        String acceptLanguage, Integer userId, String code, Exception e
+        String acceptLanguage, String verificationToken, Exception e
     ) {
-        LogContext logContext = getLogContext(
-            "verifyAndActivateFallback", 
-            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
-        );
-
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for verifyAndActivate endpoint", 
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for verifyAndActivate endpoint", 
             "verifyAndActivate"
         );
-        log.logError("verifyAndActivate controller is unavailable", error, logContext);
         throw error;
     }
 
     //Fallback method *************************************************************//
+
+    // Helper method để check business exception
+    private boolean isBusinessException(Exception e) {
+        return e instanceof ConflictExceptionHandle || 
+               e instanceof NotFoundExceptionHandle ||
+               e instanceof ValidationExceptionHandle ||
+               e instanceof ForbiddenExceptionHandle ||
+               e instanceof UnauthorizedExceptionHandle;
+    }
 
 }

@@ -9,12 +9,12 @@ import lombok.ToString;
 @ToString
 public class ForbiddenExceptionHandle extends RuntimeException {
     private final String modelName;
-    private final String requiredRole;
+    private final String required;
 
-    public ForbiddenExceptionHandle(String message, String modelName, String requiredRole) {
+    public ForbiddenExceptionHandle(String message, String modelName, String required) {
         super(message);
         this.modelName = modelName;
-        this.requiredRole = requiredRole;
+        this.required = required;
     }
 }
 

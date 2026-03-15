@@ -60,6 +60,22 @@ public class JwtService {
         return generateRefreshToken(new HashMap<>(), userDetails);
     }
 
+    // tạo token xác thực với claims
+    public String generateVeruficationToken(Integer userId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("type", "verification");
+        claims.put("userId", userId);
+
+        return Jwts
+            .builder()
+            .claims(claims)
+            .subject(String.valueOf(userId))
+            .issuedAt(new Date(System.currentTimeMillis()))
+            .expiration(new Date(System.currentTimeMillis() + 86400000L))
+            .signWith(getSecretKey())
+            .compact();
+    }
+
     // lấy tất cả claims từ token
     public Claims extractAllClaims(String token) {
         return Jwts
@@ -99,6 +115,17 @@ public class JwtService {
     // lấy role từ token
     public String extractRole(String token) {
         return extractClaims(token, Claims -> Claims.get("role", String.class));
+    }
+
+    // lấy userId từ token xác thực
+    public Integer extractUserIdFromVerificationToken(String token) {
+        Claims claims = extractAllClaims(token);
+
+        String type = claims.get("type", String.class);
+        if(!"verification".equals(type)){
+            throw new JwtException("Invalid token type");
+        }
+        return claims.get("userId", Integer.class);
     }
 
     // kiểm tra token có hết hạn chưa

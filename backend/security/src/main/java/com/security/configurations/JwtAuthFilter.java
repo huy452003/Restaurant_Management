@@ -59,7 +59,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         @NonNull HttpServletResponse response,
         @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        LogContext logContext = getLogContext("doFilterInternal", Collections.emptyList());
+            LogContext logContext = getLogContext("doFilterInternal", Collections.emptyList());
         log.logDebug("Processing request: " + request.getRequestURI(), logContext);
 
         String authHeader = request.getHeader("Authorization");

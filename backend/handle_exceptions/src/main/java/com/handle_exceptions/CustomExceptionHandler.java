@@ -314,8 +314,8 @@ public class CustomExceptionHandler {
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("Error", e.getMessage());
-        if(e.getRequiredRole() != null){
-            errors.put("RequiredRole", e.getRequiredRole());
+        if(e.getRequired() != null){
+            errors.put("Required", e.getRequired());
         }
 
         Response<?> response = new Response<>(
