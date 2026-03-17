@@ -1,4 +1,4 @@
-package com.common.models.security;
+package com.common.models.user;
 
 import java.time.LocalDate;
 
@@ -6,7 +6,6 @@ import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.models.BaseModel;
-
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import lombok.AllArgsConstructor;
@@ -16,7 +15,7 @@ import lombok.NoArgsConstructor;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class UserSecurityModel extends BaseModel{
+public class UserModel extends BaseModel{
     private String username;
     private String fullname;
     private String email;
@@ -28,10 +27,4 @@ public class UserSecurityModel extends BaseModel{
     private String address;
     private UserRole role;
     private UserStatus userStatus;
-    private String accessToken;
-    private String expires;
-    private String refreshToken;
-    private String refreshExpires;
-    private String verificationToken;
-    private String verificationTokenExpires;
 }

@@ -1,9 +1,10 @@
-package com.common.models;
+package com.common.models.order;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 
 import com.common.enums.ReservationStatus;
+import com.common.models.BaseModel;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

@@ -49,7 +49,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             .module("security")
             .className(this.getClass().getSimpleName())
             .methodName(methodName)
-            .userIds(userIds)
+            .ids(userIds)
             .build();
     }
 

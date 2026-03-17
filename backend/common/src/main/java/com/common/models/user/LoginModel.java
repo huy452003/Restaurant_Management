@@ -1,4 +1,4 @@
-package com.common.models.security;
+package com.common.models.user;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;

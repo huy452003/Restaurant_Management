@@ -17,5 +17,5 @@ public class LogContext {
     private String module;
     private String className;
     private String methodName;
-    private List<Integer> userIds;
+    private List<Integer> ids;
 }

@@ -1,26 +1,32 @@
-package com.common.models;
-
-import lombok.Data;
-import lombok.AllArgsConstructor;
-import lombok.NoArgsConstructor;
+package com.common.models.user;
 
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
-import com.common.enums.UserStatus;
+import com.common.models.BaseModel;
 
 import jakarta.validation.constraints.*;
-
-import java.time.LocalDate;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDate;
+
 @Data
+@EqualsAndHashCode(callSuper = false)
 @AllArgsConstructor
 @NoArgsConstructor
-public class UpdateUserForAdminModel {
+public class RegisterModel extends BaseModel{
     @NotBlank(message = "validate.user.username.required")
     @Size(min = 3, max = 50, message = "validate.user.username.size")
     private String username;
-
+    
+    @NotBlank(message = "validate.user.password.required")
+    @Size(min = 6, max = 100, message = "validate.user.password.size")
+    private String password;
+    
     @NotBlank(message = "validate.user.fullname.required")
     @Size(max = 100, message = "validate.user.fullname.size")
     private String fullname;
@@ -47,7 +53,4 @@ public class UpdateUserForAdminModel {
     
     @NotNull(message = "validate.user.role.required")
     private UserRole role;
-    
-    @NotNull(message = "validate.user.userStatus.required")
-    private UserStatus userStatus;
 }

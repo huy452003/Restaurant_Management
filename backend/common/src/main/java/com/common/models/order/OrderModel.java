@@ -1,4 +1,4 @@
-package com.common.models;
+package com.common.models.order;
 
 import lombok.Data;
 import lombok.AllArgsConstructor;
@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 
 import com.common.enums.OrderStatus;
 import com.common.enums.OrderType;
+import com.common.models.BaseModel;
 
 @Data
 @NoArgsConstructor

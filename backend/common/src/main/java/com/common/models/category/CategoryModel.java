@@ -1,10 +1,11 @@
-package com.common.models;
+package com.common.models.category;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
 import com.common.enums.MenuItemStatus;
+import com.common.models.BaseModel;
 
 @Data
 @NoArgsConstructor

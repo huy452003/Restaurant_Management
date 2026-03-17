@@ -6,15 +6,15 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
-import com.common.models.UserModel;
-import com.common.models.security.RegisterModel;
-import com.common.models.security.UserSecurityModel;
-import com.common.models.UpdateUserNormalModel;
-import com.common.models.security.LoginModel;
+import com.common.models.user.LoginModel;
+import com.common.models.user.RegisterModel;
+import com.common.models.user.UpdateUserForAdminModel;
+import com.common.models.user.UpdateUserNormalModel;
+import com.common.models.user.UserModel;
+import com.common.models.user.UserSecurityModel;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
-import com.common.models.UpdateUserForAdminModel;
 
 public interface UserService {
     List<UserModel> getAll();

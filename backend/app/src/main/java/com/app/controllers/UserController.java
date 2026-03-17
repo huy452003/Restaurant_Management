@@ -29,17 +29,17 @@ import com.logging.services.LoggingService;
 
 import jakarta.validation.Valid;
 
-import com.common.models.UserModel;
+import com.common.models.user.LoginModel;
+import com.common.models.user.RegisterModel;
+import com.common.models.user.UpdateUserNormalModel;
+import com.common.models.user.UserModel;
+import com.common.models.user.UserSecurityModel;
 import com.common.models.PaginatedResponse;
-import com.common.models.security.RegisterModel;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.models.Response;
-import com.common.models.security.LoginModel;
-import com.common.models.security.UserSecurityModel;
 import com.common.models.wrapper.UpdateUserForAdminRequest;
-import com.common.models.UpdateUserNormalModel;
 import com.handle_exceptions.TooManyRequestsExceptionHandle;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
@@ -64,7 +64,7 @@ public class UserController {
             .module("app")
             .className(this.getClass().getSimpleName())
             .methodName(methodName)
-            .userIds(userIds)
+            .ids(userIds)
             .build();
     }
 

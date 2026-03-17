@@ -6,7 +6,7 @@ import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-import com.common.models.UpdateUserForAdminModel;
+import com.common.models.user.UpdateUserForAdminModel;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;

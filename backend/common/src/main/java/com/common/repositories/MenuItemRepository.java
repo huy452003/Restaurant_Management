@@ -21,6 +21,6 @@ public interface MenuItemRepository extends JpaRepository<MenuItemEntity, Intege
     // Tìm menu items available theo category
     List<MenuItemEntity> findByCategoryIdAndMenuItemStatus(Integer categoryId, MenuItemStatus menuItemStatus);
     
-    // Kiểm tra xem menu item có tồn tại không
-    boolean existsByIdAndMenuItemStatus(Integer id, MenuItemStatus menuItemStatus);
+    // Kiểm tra xem menu item có tồn tại không theo tên
+    boolean existsByName(String name);
 }

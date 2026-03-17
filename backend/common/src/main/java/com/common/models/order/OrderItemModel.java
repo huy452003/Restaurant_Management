@@ -1,4 +1,4 @@
-package com.common.models;
+package com.common.models.order;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 
 import com.common.enums.OrderItemStatus;
+import com.common.models.BaseModel;
 
 import lombok.AllArgsConstructor;
 

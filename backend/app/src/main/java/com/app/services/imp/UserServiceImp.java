@@ -31,19 +31,18 @@ import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.criteria.Predicate;
 
-import com.common.models.UserModel;
-import com.common.models.security.LoginModel;
-import com.common.models.security.RegisterModel;
+import com.common.models.user.LoginModel;
+import com.common.models.user.RegisterModel;
+import com.common.models.user.UpdateUserForAdminModel;
+import com.common.models.user.UpdateUserNormalModel;
+import com.common.models.user.UserModel;
+import com.common.models.user.UserSecurityModel;
 import com.common.repositories.UserRepository;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.entities.UserEntity;
 import com.common.utils.AgeUtils;
-import com.common.models.UpdateUserForAdminModel;
-import com.common.models.UpdateUserNormalModel;
 import com.common.enums.Gender;
-import com.common.models.security.UserSecurityModel;
-
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 import com.handle_exceptions.NotFoundExceptionHandle;
@@ -84,7 +83,7 @@ public class UserServiceImp implements UserService {
             .module("app")
             .className(this.getClass().getSimpleName())
             .methodName(methodName)
-            .userIds(userIds)
+            .ids(userIds)
             .build();
     }
 
@@ -133,8 +132,8 @@ public class UserServiceImp implements UserService {
         
         // lưu cache vào redis
         redisTemplate.opsForValue().set(redisKeyGetAllUsers, userModels);
-        log.logInfo("cached " + userModels.size() + " users in key: " + redisKeyGetAllUsers, logContext);
         log.logInfo("completed, found " + userModels.size() + " users", logContext);
+        log.logInfo("cached " + userModels.size() + " users in key: " + redisKeyGetAllUsers, logContext);
         return userModels;
     }
 
@@ -282,7 +281,7 @@ public class UserServiceImp implements UserService {
             throw e;
         }
 
-        // query từ db
+        // chuyển đổi từ models sang entities để save vào db
         List<UserEntity> userEntities = registers.stream().map(register -> {
             UserEntity userEntity = modelMapper.map(register, UserEntity.class);
             userEntity.setPassword(passwordEncoder.encode(register.getPassword()));
@@ -422,11 +421,11 @@ public class UserServiceImp implements UserService {
         // kiểm tra số lượng updates phải bằng số lượng userIds
         if(updates.size() != userIds.size()){
             ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "Number of updates must match number of user IDs",
+                "Size mismatch between updates and userIds",
                 userIds,
                 "UserModel"
             );
-            log.logError("Size mismatch between updates and userIds", e, logContext);
+            log.logError(e.getMessage(), e, logContext);
             throw e;
         }
 
@@ -437,7 +436,7 @@ public class UserServiceImp implements UserService {
                     Collections.singletonList(id),
                     "UserModel"
                 );
-                log.logError("User not found", e, logContext);
+                log.logError(e.getMessage(), e, logContext);
                 return e;
             })
         ).collect(Collectors.toList());

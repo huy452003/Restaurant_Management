@@ -32,7 +32,7 @@ public class BlackListService {
             .module("security")
             .className(this.getClass().getSimpleName())
             .methodName(methodName)
-            .userIds(userIds)
+            .ids(userIds)
             .build();
     }
 
