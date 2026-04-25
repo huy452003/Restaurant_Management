@@ -27,25 +27,28 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserEntity extends BaseEntity implements UserDetails {
-    @Column(name = "username", unique = true)
+    @Column(name = "username", nullable = false, unique = true)
     private String username;
-    @Column(name = "password")
+    @Column(name = "password", nullable = false)
     private String password;
-    @Column(name = "fullname")
+    @Column(name = "fullname", nullable = false)
     private String fullname;
-    @Column(name = "email", unique = true)
+    @Column(name = "email", nullable = false, unique = true)
     private String email;
-    @Column(name = "phone", unique = true)
+    @Column(name = "phone", nullable = false, unique = true)
     private String phone;
-    @Column(name = "gender")
+    @Column(name = "gender", nullable = false)
+    @Enumerated(EnumType.STRING)
     private Gender gender;
-    @Column(name = "birth")
+    @Column(name = "birth", nullable = false)
     private LocalDate birth;
-    @Column(name = "address")
+    @Column(name = "address", nullable = false)
     private String address;
-    @Column(name = "role")
+    @Column(name = "role", nullable = false)
+    @Enumerated(EnumType.STRING)
     private UserRole role;
-    @Column(name = "user_status")
+    @Column(name = "user_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private UserStatus userStatus;
 
     // version

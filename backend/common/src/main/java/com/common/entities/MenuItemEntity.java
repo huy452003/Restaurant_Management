@@ -19,17 +19,18 @@ import com.common.enums.MenuItemStatus;
 @NoArgsConstructor
 @AllArgsConstructor
 public class MenuItemEntity extends BaseEntity {
-    @Column(name = "name", unique = true)
+    @Column(name = "name", nullable = false, unique = true)
     private String name;
     @Column(name = "description")
     private String description;
-    @Column(name = "price")
+    @Column(name = "price", nullable = false)
     private BigDecimal price;
     @Column(name = "image")
     private String image;
-    @Column(name = "category_name")
+    @Column(name = "category_name", nullable = false)
     private String categoryName;
-    @Column(name = "menu_item_status")
+    @Column(name = "menu_item_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private MenuItemStatus menuItemStatus;
 
     // version
@@ -38,7 +39,7 @@ public class MenuItemEntity extends BaseEntity {
     private Long version;
 
     @ManyToOne
-    @JoinColumn(name = "category_name", insertable = false, updatable = false)
+    @JoinColumn(name = "category_name", referencedColumnName = "name", insertable = false, updatable = false)
     private CategoryEntity category;
     @OneToMany(mappedBy = "menuItem", fetch = FetchType.LAZY)
     private List<OrderItemEntity> orderItems;

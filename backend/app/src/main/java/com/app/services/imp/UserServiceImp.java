@@ -29,20 +29,24 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.transaction.annotation.Transactional;
 
-import jakarta.persistence.criteria.Predicate;
-
-import com.common.models.user.LoginModel;
-import com.common.models.user.RegisterModel;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.common.models.user.LoginRequestModel;
+import com.common.models.user.RegisterRequestModel;
 import com.common.models.user.UpdateUserForAdminModel;
 import com.common.models.user.UpdateUserNormalModel;
 import com.common.models.user.UserModel;
-import com.common.models.user.UserSecurityModel;
+import com.common.models.user.UserLoginModel;
+import com.common.models.user.UserRegisterModel;
 import com.common.repositories.UserRepository;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.entities.UserEntity;
 import com.common.utils.AgeUtils;
+import com.common.utils.FilterCacheClearUtils;
+import com.common.utils.FilterPageCacheFacade;
 import com.common.enums.Gender;
+import com.common.specifications.FilterCondition;
+import com.common.specifications.SpecificationHelper;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 import com.handle_exceptions.NotFoundExceptionHandle;
@@ -76,6 +80,8 @@ public class UserServiceImp implements UserService {
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
     @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
     private BlackListService blackListService;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds){
@@ -95,52 +101,87 @@ public class UserServiceImp implements UserService {
         return expirationTime.format(formatter);
     }
 
-    // get all users
+    // filter users with pagination
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "getAllFallback")
-    public List<UserModel> getAll() {
-        LogContext logContext = getLogContext("getAll", Collections.emptyList());
-        log.logInfo("Getting all users ...!", logContext);
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "filtersFallback")
+    public Page<UserModel> filters(
+        Integer id, String username, String fullname,
+        String email, String phone, Gender gender,
+        LocalDate birth, String address, UserRole role, UserStatus userStatus,
+        Pageable pageable
+    ) {
+        LogContext logContext = getLogContext("filters", Collections.emptyList());
+        log.logInfo("Filtering users with pagination ...!", logContext);
 
-        // lấy cache từ redis nếu có
-        String redisKeyGetAllUsers = USER_REDIS_KEY_PREFIX + "getAllUsers";
-        List<UserModel> cachedUsers = (List<UserModel>) redisTemplate.opsForValue().get(redisKeyGetAllUsers);
-        if(cachedUsers != null && !cachedUsers.isEmpty()) {
-            log.logInfo("completed, found " + cachedUsers.size() + " users in cache", logContext);
-            return cachedUsers;
+        List<FilterCondition<UserEntity>> conditions = buildFilterConditions(
+            id, username, fullname, email, phone, gender, birth, address, role, userStatus
+        );
+
+        // lấy cache key
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            USER_REDIS_KEY_PREFIX, conditions, pageable);
+
+        // lấy data từ cache
+        Page<UserModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, UserModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo("completed, found " + cachedPage.getTotalElements() + " users in cache", logContext);
+            return cachedPage;
         }
-        log.logInfo("Not found users in cache, query from database", logContext);
+        log.logInfo("Not found users in cache, filtering users with conditions: " + conditions, logContext);
 
-        // query từ db
-        List<UserEntity> userEntities = userRepository.findAll();
-        if(userEntities == null || userEntities.isEmpty()){
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle("No users found", Collections.emptyList(), "userModel");
-            log.logError("threw an exception", e, logContext);
+        Page<UserEntity> pageEntities;
+        if(conditions.isEmpty()){
+            pageEntities = userRepository.findAll(pageable);
+            log.logWarn("No conditions provided, returning all users with pagination", logContext);
+        } else {
+            Specification<UserEntity> spec = SpecificationHelper.buildSpecification(conditions);
+            pageEntities = userRepository.findAll(spec, pageable);
+        }
+        
+        if(pageEntities.isEmpty()){
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "No users found with the given conditions or pagination",
+                Collections.emptyList(),
+                "UserModel"
+            );
+            log.logError("No users found with conditions or pagination", e, logContext);
             throw e;
         }
         
-        // Map từ Entity sang Model trước khi lưu cache
-        List<UserModel> userModels = userEntities.stream().map(
-            userEntity -> {
-                UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-                if(userEntity.getBirth() != null){
-                    userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-                }
-                return userModel;
+        // Map từ Entity sang Model và tính age
+        List<UserModel> pageDatas = pageEntities.getContent().stream().map(userEntity -> {
+            UserModel userModel = modelMapper.map(userEntity, UserModel.class);
+            if(userEntity.getBirth() != null){
+                userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
             }
-        ).collect(Collectors.toList());
+            return userModel;
+        }).collect(Collectors.toList());
         
-        // lưu cache vào redis
-        redisTemplate.opsForValue().set(redisKeyGetAllUsers, userModels);
-        log.logInfo("completed, found " + userModels.size() + " users", logContext);
-        log.logInfo("cached " + userModels.size() + " users in key: " + redisKeyGetAllUsers, logContext);
-        return userModels;
+        // Tạo Page<UserModel> từ List<UserModel> và thông tin pagination từ Page<UserEntity>
+        Page<UserModel> userModelPage = new PageImpl<>(
+            pageDatas,                      // data 
+            pageEntities.getPageable(),     // pageable (để lấy số trang hiện tại, số phần tử mỗi trang)
+            pageEntities.getTotalElements() // total elements (để lấy tổng số phần tử)
+        );
+
+        // lưu cache
+        if (redisKeyFilters != null) {
+            FilterPageCacheFacade.writeFirstPageCache(redisTemplate, redisKeyFilters, userModelPage);
+            log.logInfo("Cached first-page filter snapshot for " + userModelPage.getTotalElements()
+                + " users, key: " + redisKeyFilters, logContext);
+        }
+
+        log.logInfo("completed, found " + userModelPage.getTotalElements() + " users in " + 
+                    userModelPage.getTotalPages() + " pages", logContext);
+        return userModelPage;
     }
 
     // login
     @Override
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "loginFallback")
-    public UserSecurityModel login(LoginModel req) {
+    public UserLoginModel login(LoginRequestModel req) {
         LogContext logContext = getLogContext("login", Collections.emptyList());
         log.logInfo("Logging in user ...!", logContext);
 
@@ -154,7 +195,7 @@ public class UserServiceImp implements UserService {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
                 "User not found with username: " + req.getUsername() + "when login",
                 Collections.emptyList(),
-                "UserSecurityModel"
+                "UserLoginModel"
             );
             log.logError(e.getMessage(), null, logContext);
             return e;
@@ -164,7 +205,7 @@ public class UserServiceImp implements UserService {
         if(userEntity.getUserStatus() == UserStatus.INACTIVE){
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
                 "User is inactive",
-                "UserSecurityModel",
+                "UserLoginModel",
                 "userStatus must be ACTIVE"
             );
             log.logError(e.getMessage(), null, logContext);
@@ -173,7 +214,7 @@ public class UserServiceImp implements UserService {
         if(userEntity.getUserStatus() == UserStatus.PENDING){
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
                 "User is pending",
-                "UserSecurityModel",
+                "UserLoginModel",
                 "userStatus must be ACTIVE"
             );
             log.logError(e.getMessage(), null, logContext);
@@ -181,18 +222,18 @@ public class UserServiceImp implements UserService {
         }
         
         // trả response với tokens
-        UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
+        UserLoginModel userLoginModel = modelMapper.map(userEntity, UserLoginModel.class);
         Map<String, Object> claim = new HashMap<>();
         claim.put("role", userEntity.getRole().name());
-        userSecurityModel.setAccessToken(jwtService.generateAccessToken(claim, userEntity));
-        userSecurityModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
-        userSecurityModel.setRefreshToken(jwtService.generateRefreshToken(claim, userEntity));
-        userSecurityModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
+        userLoginModel.setAccessToken(jwtService.generateAccessToken(claim, userEntity));
+        userLoginModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
+        userLoginModel.setRefreshToken(jwtService.generateRefreshToken(claim, userEntity));
+        userLoginModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
         if(userEntity.getBirth() != null){
-            userSecurityModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
+            userLoginModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
         }
         log.logInfo("completed, logged in user: " + userEntity.getUsername(), logContext);
-        return userSecurityModel;
+        return userLoginModel;
     }
 
     // logout
@@ -223,18 +264,18 @@ public class UserServiceImp implements UserService {
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "createsFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
-    public List<UserSecurityModel> creates(List<RegisterModel> registers) {
+    public List<UserRegisterModel> creates(List<RegisterRequestModel> registers) {
         LogContext logContext = getLogContext("creates", Collections.emptyList());
         log.logInfo("Creating " + registers.size() + " users ...!", logContext);
 
         // Check nếu có user muốn tạo ADMIN role nhưng đã có ADMIN trong hệ thống
         boolean hasAdminInSystem = userRepository.existsByRole(UserRole.ADMIN);
-        for (RegisterModel register : registers) {
+        for (RegisterRequestModel register : registers) {
             if (register.getRole().equals(UserRole.ADMIN) && hasAdminInSystem) {
                 ValidationExceptionHandle e = new ValidationExceptionHandle(
                     "Admin role already exists",
                     Collections.singletonList(register.getRole()),
-                    "UserSecurityModel"
+                    "UserRegisterModel"
                 );
                 log.logError("System already has an admin user, cannot create another admin", e, logContext);
                 throw e;
@@ -243,7 +284,7 @@ public class UserServiceImp implements UserService {
 
         // Kiểm tra trùng lặp trước khi lưu (normalize input để so sánh với data đã normalize trong DB)
         List<Object> conflicts = new ArrayList<>();
-        for (RegisterModel register : registers) {
+        for (RegisterRequestModel register : registers) {
             // Normalize input
             register.setUsername(register.getUsername().toLowerCase().trim());
             register.setEmail(register.getEmail().toLowerCase().trim());
@@ -275,7 +316,7 @@ public class UserServiceImp implements UserService {
             ConflictExceptionHandle e = new ConflictExceptionHandle(
                 "Duplicate unique fields detected",
                 conflicts,
-                "UserSecurityModel"
+                "UserRegisterModel"
             );
             log.logError("Thrown an exception when create users", e, logContext);
             throw e;
@@ -293,25 +334,25 @@ public class UserServiceImp implements UserService {
     
         userRepository.saveAll(userEntities);   
 
-        // xóa cache
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
-        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
+        // xóa cache filter
+        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        log.logInfo("Deleted filter caches after create", logContext);
+        
         log.logInfo("completed, created " + userEntities.size() + " users with PENDING status", logContext);
         return userEntities.stream().map(userEntity -> {
-            UserSecurityModel userSecurityModel = modelMapper.map(userEntity, UserSecurityModel.class);
+            UserRegisterModel userRegisterModel = modelMapper.map(userEntity, UserRegisterModel.class);
             Map<String, Object> claims = new HashMap<>();
             claims.put("role", userEntity.getRole().name());
-            userSecurityModel.setAccessToken(jwtService.generateAccessToken(claims, userEntity));
-            userSecurityModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
-            userSecurityModel.setRefreshToken(jwtService.generateRefreshToken(claims, userEntity));
-            userSecurityModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
-            userSecurityModel.setVerificationToken(jwtService.generateVeruficationToken(userEntity.getId()));
-            userSecurityModel.setVerificationTokenExpires(formatExpirationTime(86400000L));
+            userRegisterModel.setAccessToken(jwtService.generateAccessToken(claims, userEntity));
+            userRegisterModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
+            userRegisterModel.setRefreshToken(jwtService.generateRefreshToken(claims, userEntity));
+            userRegisterModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
+            userRegisterModel.setVerificationToken(jwtService.generateVeruficationToken(userEntity.getId()));
+            userRegisterModel.setVerificationTokenExpires(formatExpirationTime(jwtConfig.verificationExpiration()));
             if (userEntity.getBirth() != null) {
-                userSecurityModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
+                userRegisterModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
             }
-            return userSecurityModel;
+            return userRegisterModel;
         }).collect(Collectors.toList());
     }
 
@@ -393,10 +434,9 @@ public class UserServiceImp implements UserService {
             log.logInfo("completed, no changes detected, skipped update", logContext);
         }
 
-        // xóa cache
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
-        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
+        // xóa cache filter
+        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        log.logInfo("Deleted filter caches after update", logContext);
         
         // Return user đã update
         UserModel userModel = modelMapper.map(currentUser, UserModel.class);
@@ -542,10 +582,10 @@ public class UserServiceImp implements UserService {
             log.logInfo("completed, no changes detected, skipped update", logContext);
         }
 
-        // xóa cache
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
-        log.logInfo("Deleted cache for getAllUsers and filters", logContext);
+        // xóa cache filter
+        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        log.logInfo("Deleted filter caches after update", logContext);
+
         // Return tất cả users (bao gồm cả những user không có thay đổi)
         return foundUsers.stream().map(userEntity -> {
                 UserModel userModel = modelMapper.map(userEntity, UserModel.class);
@@ -555,117 +595,6 @@ public class UserServiceImp implements UserService {
                 return userModel;
             }
         ).collect(Collectors.toList());
-    }
-
-    // filter users with pagination
-    @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "filtersFallback")
-    public Page<UserModel> filters(
-        Integer id, String username, String fullname,
-        String email, String phone, Gender gender,
-        LocalDate birth, String address, UserRole role, UserStatus userStatus,
-        Pageable pageable
-    ) {
-        LogContext logContext = getLogContext("filters", Collections.emptyList());
-        log.logInfo("Filtering users with pagination ...!", logContext);
-
-        // lấy cache từ redis nếu có
-        String redisKeyFilters = USER_REDIS_KEY_PREFIX + "filters";
-        Page<UserModel> cachedPage = (Page<UserModel>) redisTemplate.opsForValue().get(redisKeyFilters);
-        if(cachedPage != null && !cachedPage.isEmpty()){
-            log.logInfo("completed, found " + cachedPage.getTotalElements() + " users in cache", logContext);
-            return cachedPage;
-        }
-        log.logInfo("not found users in cache, query from database", logContext);
-
-        // tạo map conditions để query theo các điều kiện hợp lệ
-        Map<String, Object> conditions = new HashMap<>();
-
-        if(id != null && id > 0){
-            conditions.put("id", id);
-        }
-        if(username != null){
-            conditions.put("username", username);
-        }
-        if(fullname != null){
-            conditions.put("fullname", fullname);
-        }
-        if(email != null){
-            conditions.put("email", email);
-        }
-        if(phone != null){
-            conditions.put("phone", phone);
-        }
-        if(gender != null && (gender.equals(Gender.MALE) || gender.equals(Gender.FEMALE))){
-            conditions.put("gender", gender);
-        }
-        if(birth != null && birth.isBefore(LocalDate.now())){
-            conditions.put("birth", birth);
-        }
-        if(address != null){
-            conditions.put("address", address);
-        }
-        if(role != null && (role.equals(UserRole.ADMIN) ||
-           role.equals(UserRole.CUSTOMER) || role.equals(UserRole.MANAGER) || 
-           role.equals(UserRole.WAITER) || role.equals(UserRole.CHEF) || 
-           role.equals(UserRole.CASHIER))){
-            conditions.put("role", role);
-        }
-        if(userStatus != null && userStatus.equals(UserStatus.ACTIVE)){
-            conditions.put("userStatus", userStatus);
-        }
-
-        if(conditions.isEmpty()){
-            Page<UserEntity> pageEntites = userRepository.findAll(pageable);
-            List<UserModel> userModels = pageEntites.getContent().stream().map(userEntity -> {
-                UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-                if(userEntity.getBirth() != null){
-                    userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-                }
-                return userModel;
-            }).collect(Collectors.toList());
-            log.logWarn("No conditions provided, returning all users with pagination", logContext);
-            return new PageImpl<>(userModels, pageEntites.getPageable(), pageEntites.getTotalElements());
-        }
-        log.logInfo("Filtering users with conditions: " + conditions, logContext);
-
-        // Build specification từ map conditions
-        Specification<UserEntity> spec = buildSpecificationFromConditions(conditions);
-        
-        // Query với pagination
-        Page<UserEntity> pageEntities = userRepository.findAll(spec, pageable);
-        
-        if(pageEntities.isEmpty()){
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "No users found with the given conditions or pagination",
-                Collections.emptyList(),
-                "UserModel"
-            );
-            log.logError("No users found with conditions or pagination", e, logContext);
-            throw e;
-        }
-        
-        // Map từ Entity sang Model và tính age
-        List<UserModel> pageDatas = pageEntities.getContent().stream().map(userEntity -> {
-            UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-            if(userEntity.getBirth() != null){
-                userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-            }
-            return userModel;
-        }).collect(Collectors.toList());
-        
-        // Tạo Page<UserModel> từ List<UserModel> và thông tin pagination từ Page<UserEntity>
-        Page<UserModel> userModelPage = new PageImpl<>(
-            pageDatas,                      // data 
-            pageEntities.getPageable(),     // pageable (để lấy số trang hiện tại, số phần tử mỗi trang)
-            pageEntities.getTotalElements() // total elements (để lấy tổng số phần tử)
-        );
-        // lưu cache vào redis
-        redisTemplate.opsForValue().set(redisKeyFilters, userModelPage);
-        log.logInfo("cached " + userModelPage.getTotalElements() + " users in key: " + redisKeyFilters, logContext);
-        log.logInfo("completed, found " + userModelPage.getTotalElements() + " users in " + 
-                    userModelPage.getTotalPages() + " pages", logContext);
-        return userModelPage;
     }
 
     // verify and activate user
@@ -707,10 +636,9 @@ public class UserServiceImp implements UserService {
         userEntity.setUserStatus(UserStatus.ACTIVE);
         userRepository.save(userEntity);
 
-        // xóa cache
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "getAllUsers");
-        redisTemplate.delete(USER_REDIS_KEY_PREFIX + "filters");
-        log.logInfo("Deleted cache for getAllUsers and filters when verify and activate user", logContext);
+        // xóa cache filter
+        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        log.logInfo("Deleted filter caches after verify and activate", logContext);
         
         log.logInfo("User verified and activated successfully", logContext);
         
@@ -721,75 +649,79 @@ public class UserServiceImp implements UserService {
         return userModel;
     }
 
-    // build specification từ map conditions để có thể query theo các điều kiện hợp lệ
-    private Specification<UserEntity> buildSpecificationFromConditions(Map<String, Object> conditions) {
-        return (root, query, criteriaBuilder) -> {
-            List<Predicate> predicates = new ArrayList<>();
+    // resend verification token
+    @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "resendVerificationTokenFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
+    public String resendVerificationToken(Integer userId) {
+        LogContext logContext = getLogContext("resendVerificationToken", Collections.singletonList(userId));
+        log.logInfo("Resending verification token to user ...!", logContext);
 
-            conditions.forEach((field, value) -> {
-                if (value == null) {
-                    return;
-                }
-
-                switch (field) {
-                    case "id":
-                        predicates.add(criteriaBuilder.equal(root.get("id"), value));
-                        break;
-                    case "username":
-                    case "fullname":
-                    case "email":
-                    case "phone":
-                    case "address":
-                        String searchValue = "%" + ((String) value).toLowerCase().trim() + "%";
-                        predicates.add(criteriaBuilder.like( criteriaBuilder.lower(root.get(field)),searchValue));
-                        break;
-                    case "gender":
-                        predicates.add(criteriaBuilder.equal(root.get("gender"), value));
-                        break;
-                    case "birth":
-                        predicates.add(criteriaBuilder.equal(root.get("birth"), value));
-                        break;
-                    case "role":
-                        predicates.add(criteriaBuilder.equal(root.get("role"), value));
-                        break;
-                    case "userStatus":
-                        predicates.add(criteriaBuilder.equal(root.get("userStatus"), value));
-                        break;
-                }
-            });
-            return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
-        };
+        UserEntity userEntity = userRepository.findById(userId).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "User not found with id: " + userId,
+                Collections.singletonList(userId),
+                "userModel"
+            );
+            log.logError("User not found", e, logContext);
+            return e;
+        });
+        if (userEntity.getUserStatus() != UserStatus.PENDING) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "User is not in PENDING status. Current status: " + userEntity.getUserStatus(),
+                Collections.singletonList(userId),
+                "userModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        String verificationToken = jwtService.generateVeruficationToken(userId);
+        log.logInfo("completed, resended verification token to user: " + userId, logContext);
+        return verificationToken;
     }
 
     //Fallback method *************************************************************//
 
-    // getAllFallback
+    // filtersFallback
     @SuppressWarnings("unused")
-    private List<UserModel> getAllFallback(Exception e) {
+    private Page<UserModel> filtersFallback(
+        Integer id, String username, String fullname,
+        String email, String phone, Gender gender,
+        LocalDate birth, String address, UserRole role, UserStatus userStatus,
+        Pageable pageable, Exception e
+    ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
         
-        // Thử lấy từ cache trước khi throw ServiceUnavailableExceptionHandle
-        String redisKeyGetAllUsers = USER_REDIS_KEY_PREFIX + "getAllUsers";
-        List<UserModel> cachedUsers = (List<UserModel>) redisTemplate.opsForValue().get(redisKeyGetAllUsers);
-        if(cachedUsers != null && !cachedUsers.isEmpty()) {
-            return cachedUsers;
+        List<FilterCondition<UserEntity>> conditions = buildFilterConditions(
+            id, username, fullname, email, phone, gender, birth, address, role, userStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            USER_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<UserModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, UserModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            return cachedPage;
         }
-        
+
         // Service unavailable và không có cache
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for getAll service", 
-            "getAll"
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
+            "filters"
         );
         throw error;
     }
 
     // loginFallback
     @SuppressWarnings("unused")
-    private UserSecurityModel loginFallback(
-        LoginModel req, Exception e
+    private UserRegisterModel loginFallback(
+        LoginRequestModel req, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
@@ -824,8 +756,8 @@ public class UserServiceImp implements UserService {
 
     // createsFallback
     @SuppressWarnings("unused")
-    private List<UserSecurityModel> createsFallback(
-        List<RegisterModel> registers, Exception e
+    private List<UserRegisterModel> createsFallback(
+        List<RegisterRequestModel> registers, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
@@ -883,34 +815,6 @@ public class UserServiceImp implements UserService {
         throw error;
     }
 
-    // filtersFallback
-    @SuppressWarnings("unused")
-    private Page<UserModel> filtersFallback(
-        Integer id, String username, String fullname,
-        String email, String phone, Gender gender,
-        LocalDate birth, String address, UserRole role, UserStatus userStatus,
-        Pageable pageable, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        
-        // Thử lấy từ cache trước khi throw ServiceUnavailableExceptionHandle
-        String redisKeyFilters = USER_REDIS_KEY_PREFIX + "filters";
-        Page<UserModel> cachedPage = (Page<UserModel>) redisTemplate.opsForValue().get(redisKeyFilters);
-        if(cachedPage != null && !cachedPage.isEmpty()) {
-            return cachedPage;
-        }
-        
-        // Service unavailable và không có cache
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
-            "filters"
-        );
-        throw error;
-    }
-
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
     private UserModel verifyAndActivateFallback(
@@ -929,6 +833,24 @@ public class UserServiceImp implements UserService {
         throw error;
     }
 
+    // resendVerificationTokenFallback
+    @SuppressWarnings("unused")
+    private String resendVerificationTokenFallback(
+        Integer userId, Exception e
+    ) {
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Service unavailable hoặc exception khác
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for resendVerificationToken service", 
+            "resendVerificationToken"
+        );
+        throw error;
+    }
+
     //Fallback method *************************************************************//
 
     // Helper method để check business exception
@@ -938,6 +860,47 @@ public class UserServiceImp implements UserService {
                e instanceof ValidationExceptionHandle ||
                e instanceof ForbiddenExceptionHandle ||
                e instanceof UnauthorizedExceptionHandle;
+    }
+
+    private List<FilterCondition<UserEntity>> buildFilterConditions(
+        Integer id, String username, String fullname, String email, String phone,
+        Gender gender, LocalDate birth, String address, UserRole role, UserStatus userStatus
+    ) {
+        List<FilterCondition<UserEntity>> conditions = new ArrayList<>();
+        if (id != null && id > 0) {
+            conditions.add(FilterCondition.eq("id", id));
+        }
+        if (username != null) {
+            conditions.add(FilterCondition.likeIgnoreCase("username", username));
+        }
+        if (fullname != null) {
+            conditions.add(FilterCondition.likeIgnoreCase("fullname", fullname));
+        }
+        if (email != null) {
+            conditions.add(FilterCondition.likeIgnoreCase("email", email));
+        }
+        if (phone != null) {
+            conditions.add(FilterCondition.likeIgnoreCase("phone", phone));
+        }
+        if (gender != null && (gender.equals(Gender.MALE) || gender.equals(Gender.FEMALE))) {
+            conditions.add(FilterCondition.eq("gender", gender));
+        }
+        if (birth != null && birth.isBefore(LocalDate.now())) {
+            conditions.add(FilterCondition.eq("birth", birth));
+        }
+        if (address != null) {
+            conditions.add(FilterCondition.likeIgnoreCase("address", address));
+        }
+        if (role != null && (role.equals(UserRole.ADMIN) ||
+            role.equals(UserRole.CUSTOMER) || role.equals(UserRole.MANAGER) ||
+            role.equals(UserRole.WAITER) || role.equals(UserRole.CHEF) ||
+            role.equals(UserRole.CASHIER))) {
+            conditions.add(FilterCondition.eq("role", role));
+        }
+        if (userStatus != null && userStatus.equals(UserStatus.ACTIVE)) {
+            conditions.add(FilterCondition.eq("userStatus", userStatus));
+        }
+        return conditions;
     }
 
 }

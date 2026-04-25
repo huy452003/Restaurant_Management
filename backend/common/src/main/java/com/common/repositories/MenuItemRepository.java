@@ -1,6 +1,7 @@
 package com.common.repositories;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 import com.common.entities.MenuItemEntity;
@@ -8,7 +9,7 @@ import com.common.enums.MenuItemStatus;
 import java.util.List;
 
 @Repository
-public interface MenuItemRepository extends JpaRepository<MenuItemEntity, Integer> {
+public interface MenuItemRepository extends JpaRepository<MenuItemEntity, Integer>, JpaSpecificationExecutor<MenuItemEntity> {
     // Tìm menu items theo status
     List<MenuItemEntity> findByMenuItemStatus(MenuItemStatus menuItemStatus);
     

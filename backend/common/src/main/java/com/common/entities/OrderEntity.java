@@ -21,15 +21,17 @@ import com.common.enums.OrderType;
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderEntity extends BaseEntity {
-    @Column(name = "order_number", unique = true, length = 20)
+    @Column(name = "order_number", nullable = false, unique = true, length = 50)
     private String orderNumber;
-    @Column(name = "table_id", insertable = false, updatable = false)
+    @Column(name = "table_id", nullable = false, insertable = false, updatable = false)
     private Integer tableId;
-    @Column(name = "waiter_id", insertable = false, updatable = false)
+    @Column(name = "waiter_id", nullable = false, insertable = false, updatable = false)
     private Integer waiterId;
-    @Column(name = "order_status")
+    @Column(name = "order_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private OrderStatus orderStatus;
-    @Column(name = "order_type")
+    @Column(name = "order_type", nullable = false)
+    @Enumerated(EnumType.STRING)
     private OrderType orderType;
     @Column(name = "sub_total", nullable = false)
     private BigDecimal subTotal;

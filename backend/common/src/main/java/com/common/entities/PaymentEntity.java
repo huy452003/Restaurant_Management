@@ -20,15 +20,17 @@ import com.common.enums.PaymentStatus;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PaymentEntity extends BaseEntity {
-    @Column(name = "order_id", insertable = false, updatable = false)
+    @Column(name = "order_id", nullable = false, insertable = false, updatable = false)
     private Integer orderId;
-    @Column(name = "cashier_id", insertable = false, updatable = false)
+    @Column(name = "cashier_id", nullable = false, insertable = false, updatable = false)
     private Integer cashierId;
     @Column(name = "payment_method", nullable = false)
+    @Enumerated(EnumType.STRING)
     private PaymentMethod paymentMethod;
     @Column(name = "amount", nullable = false)
     private BigDecimal amount;
     @Column(name = "payment_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private PaymentStatus paymentStatus;
     @Column(name = "transaction_id")
     private String transactionId;

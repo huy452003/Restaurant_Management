@@ -17,13 +17,14 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class TableEntity extends BaseEntity {
-    @Column(name = "table_number", unique = true)
+    @Column(name = "table_number", nullable = false, unique = true)
     private Integer tableNumber;
     @Column(name = "capacity")
     private Integer capacity;
-    @Column(name = "table_status")
+    @Column(name = "table_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private TableStatus tableStatus;
-    @Column(name = "location")
+    @Column(name = "location", nullable = false)
     private String location;
 
     // version

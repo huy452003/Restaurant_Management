@@ -18,7 +18,7 @@ import java.time.LocalDate;
 @EqualsAndHashCode(callSuper = false)
 @AllArgsConstructor
 @NoArgsConstructor
-public class RegisterModel extends BaseModel{
+public class RegisterRequestModel extends BaseModel{
     @NotBlank(message = "validate.user.username.required")
     @Size(min = 3, max = 50, message = "validate.user.username.size")
     private String username;

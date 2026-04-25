@@ -7,8 +7,7 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
-import java.time.LocalDate;
-import java.time.LocalTime;
+import java.time.LocalDateTime;
 
 import com.common.enums.ReservationStatus;
 
@@ -19,21 +18,20 @@ import com.common.enums.ReservationStatus;
 @NoArgsConstructor
 @AllArgsConstructor 
 public class ReservationEntity extends BaseEntity {
-    @Column(name = "customer_name")
+    @Column(name = "customer_name", nullable = false)
     private String customerName;
-    @Column(name = "customer_phone")
+    @Column(name = "customer_phone", nullable = false)
     private String customerPhone;
-    @Column(name = "customer_email")
+    @Column(name = "customer_email", nullable = false)
     private String customerEmail;
-    @Column(name = "table_id", insertable = false, updatable = false)
+    @Column(name = "table_id", nullable = false, insertable = false, updatable = false)
     private Integer tableId;
-    @Column(name = "reservation_date")
-    private LocalDate reservationDate;
-    @Column(name = "reservation_time")
-    private LocalTime reservationTime;
-    @Column(name = "number_of_guests")
+    @Column(name = "reservation_ts", nullable = false)
+    private LocalDateTime reservationTs;
+    @Column(name = "number_of_guests", nullable = false)
     private Integer numberOfGuests;
-    @Column(name = "reservation_status")
+    @Column(name = "reservation_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private ReservationStatus reservationStatus;
     @Column(name = "special_request")
     private String specialRequest;

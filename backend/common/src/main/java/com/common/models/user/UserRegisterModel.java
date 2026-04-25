@@ -16,7 +16,7 @@ import lombok.NoArgsConstructor;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class UserSecurityModel extends BaseModel{
+public class UserRegisterModel extends BaseModel{
     private String username;
     private String fullname;
     private String email;

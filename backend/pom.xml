@@ -41,6 +41,7 @@
       <modules>          
         <module>common</module>          
         <module>app</module>         
+        <module>app-reactive</module>
         <module>logging</module>       
         <module>handle_exceptions</module> 
         <module>security</module>
@@ -62,6 +63,13 @@
             <artifactId>app</artifactId>                 
             <version>4.0.1</version>                 
             <type>war</type>
+            <scope>compile</scope>
+          </dependency>
+          <dependency>
+            <groupId>com.appreactive</groupId>
+            <artifactId>app-reactive</artifactId>
+            <version>4.0.1</version>
+            <type>jar</type>
             <scope>compile</scope>
           </dependency>
           <dependency>
@@ -150,6 +158,13 @@
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
             <version>2.1.0</version>
+          </dependency>
+          <!-- Source: https://mvnrepository.com/artifact/org.flywaydb/flyway-mysql -->
+          <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+            <version>12.3.0</version>
+            <scope>compile</scope>
           </dependency>
         </dependencies>
       </dependencyManagement>

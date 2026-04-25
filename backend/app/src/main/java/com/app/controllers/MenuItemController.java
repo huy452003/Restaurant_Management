@@ -5,6 +5,9 @@ import java.util.List;
 import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.context.MessageSource;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,6 +19,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import jakarta.validation.Valid;
 
 import com.app.services.MenuItemService;
+import com.common.enums.MenuItemStatus;
+import com.common.models.PaginatedResponse;
 import com.common.models.menu.MenuItemModel;
 import com.common.models.wrapper.UpdateMenuItemRequest;
 import com.common.models.Response;
@@ -24,6 +29,7 @@ import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/menu-items")
@@ -46,20 +52,26 @@ public class MenuItemController {
 
     @GetMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<Response<List<MenuItemModel>>> getAll(
-        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage
+    public ResponseEntity<Response<PaginatedResponse<MenuItemModel>>> filters(
+        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
+        @RequestParam(required = false) Integer id,
+        @RequestParam(required = false) String name,
+        @RequestParam(required = false) String categoryName,
+        @RequestParam(required = false) MenuItemStatus menuItemStatus,
+        @PageableDefault(size = 10, sort = "id") Pageable pageable
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("getAll", Collections.emptyList());
+        LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        List<MenuItemModel> menuItems = menuItemService.getAll();
-        Response<List<MenuItemModel>> response = new Response<>(
+        Page<MenuItemModel> menuItemPage = menuItemService.filters(id, name, categoryName, menuItemStatus, pageable);
+        PaginatedResponse<MenuItemModel> paginatedResponse = PaginatedResponse.of(menuItemPage);
+        Response<PaginatedResponse<MenuItemModel>> response = new Response<>(
             200,
-            messageSource.getMessage("response.message.getSuccess", null, locale),
+            messageSource.getMessage("response.message.filtersSuccess", null, locale),
             "menuItemModel",
             null,
-            menuItems
+            paginatedResponse
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);

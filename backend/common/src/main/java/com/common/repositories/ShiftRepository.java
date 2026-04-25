@@ -2,6 +2,7 @@ package com.common.repositories;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -12,7 +13,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Repository
-public interface ShiftRepository extends JpaRepository<ShiftEntity, Integer> {
+public interface ShiftRepository extends JpaRepository<ShiftEntity, Integer>, JpaSpecificationExecutor<ShiftEntity> {
     // Tìm shifts theo employee
     List<ShiftEntity> findByEmployee_Id(Integer employeeId);
     

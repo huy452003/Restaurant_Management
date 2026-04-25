@@ -10,7 +10,7 @@ import jakarta.validation.constraints.Size;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class LoginModel {
+public class LoginRequestModel {
     @NotBlank(message = "validate.user.username.required")
     @Size(min = 3, max = 50, message = "validate.user.username.size")
     private String username;

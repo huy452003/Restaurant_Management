@@ -73,6 +73,11 @@
 			<artifactId>mysql-connector-j</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-mysql</artifactId>
+			<scope>compile</scope>
+		</dependency>
 		<!-- model mapper dependencies -->
 		<dependency>
 			<groupId>org.modelmapper</groupId>

@@ -18,17 +18,18 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class InventoryEntity extends BaseEntity {
-    @Column(name = "ingredient_name", unique = true)
+    @Column(name = "ingredient_name", nullable = false, unique = true)
     private String ingredientName;
-    @Column(name = "quantity")
+    @Column(name = "quantity", nullable = false)
     private Integer quantity;
-    @Column(name = "unit")
+    @Column(name = "unit", nullable = false)
     private String unit;
-    @Column(name = "min_stock_level")
+    @Column(name = "min_stock_level", nullable = false)
     private Integer minStockLevel;
-    @Column(name = "inventory_status")
+    @Column(name = "inventory_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private InventoryStatus inventoryStatus;
-    @Column(name = "last_restock_date")
+    @Column(name = "last_restock_date", nullable = false)
     private LocalDateTime lastRestockDate;
 
     // version

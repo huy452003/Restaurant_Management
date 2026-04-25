@@ -1,0 +1,147 @@
+CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(200) NOT NULL,
+    fullname VARCHAR(50) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    phone VARCHAR(20) NOT NULL UNIQUE,
+    gender VARCHAR(50) NOT NULL,
+    birth DATE NOT NULL,
+    address VARCHAR(200) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+    user_status VARCHAR(50) NOT NULL,
+    version BIGINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    description VARCHAR(500),
+    image VARCHAR(500) NOT NULL,
+    menu_item_status VARCHAR(50) NOT NULL,
+    version BIGINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS inventories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    ingredient_name VARCHAR(200) NOT NULL UNIQUE,
+    quantity INT NOT NULL,
+    unit VARCHAR(100) NOT NULL,
+    min_stock_level INT NOT NULL,
+    inventory_status VARCHAR(50) NOT NULL,
+    last_restock_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version BIGINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS menu_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    description VARCHAR(500),
+    price DECIMAL(10,2) NOT NULL,
+    image VARCHAR(200),
+    category_name VARCHAR(50) NOT NULL,
+    menu_item_status VARCHAR(50) NOT NULL,
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_menu_items_category_name FOREIGN KEY (category_name) REFERENCES categories(name)
+);
+
+CREATE TABLE IF NOT EXISTS tables (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    table_number INT NOT NULL UNIQUE,
+    capacity INT,
+    table_status VARCHAR(50) NOT NULL,
+    location VARCHAR(200) NOT NULL,
+    version BIGINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    order_number VARCHAR(50) NOT NULL UNIQUE,
+    table_id INT NOT NULL,
+    waiter_id INT NOT NULL,
+    order_status VARCHAR(50) NOT NULL,
+    order_type VARCHAR(50) NOT NULL,
+    sub_total DECIMAL(10,2) NOT NULL,
+    tax DECIMAL(10,2) NOT NULL,
+    discount DECIMAL(10,2),
+    total_amount DECIMAL(10,2) NOT NULL,
+    notes VARCHAR(300),
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_orders_table_id FOREIGN KEY (table_id) REFERENCES tables(id),
+    CONSTRAINT fk_orders_waiter_id FOREIGN KEY (waiter_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    order_id INT NOT NULL,
+    menu_item_id INT NOT NULL,
+    quantity INT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    sub_total DECIMAL(10,2) NOT NULL,
+    special_instructions VARCHAR(100),
+    order_item_status VARCHAR(50) NOT NULL,
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_order_items_order_id FOREIGN KEY (order_id) REFERENCES orders(id),
+    CONSTRAINT fk_order_items_menu_item_id FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
+);
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    order_id INT NOT NULL,
+    cashier_id INT NOT NULL,
+    payment_method VARCHAR(50) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    payment_status VARCHAR(50) NOT NULL,
+    transaction_id VARCHAR(100),
+    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_payments_order_id FOREIGN KEY (order_id) REFERENCES orders(id),
+    CONSTRAINT fk_payments_cashier_id FOREIGN KEY (cashier_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS reservations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    customer_name VARCHAR(50) NOT NULL,
+    customer_phone VARCHAR(15) NOT NULL,
+    customer_email VARCHAR(50) NOT NULL,
+    table_id INT NOT NULL,
+    reservation_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    number_of_guests INT NOT NULL,
+    reservation_status VARCHAR(50) NOT NULL,
+    special_request VARCHAR(300),
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_reservations_table_id FOREIGN KEY (table_id) REFERENCES tables(id)
+);
+
+CREATE TABLE IF NOT EXISTS shifts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    employee_id INT NOT NULL,
+    shift_date DATE NOT NULL,
+    start_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    end_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    shift_status VARCHAR(50) NOT NULL,
+    notes VARCHAR(300),
+    version BIGINT DEFAULT 0,
+    CONSTRAINT fk_shifts_employee_id FOREIGN KEY (employee_id) REFERENCES users(id)
+);

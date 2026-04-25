@@ -71,7 +71,7 @@ public class JwtService {
             .claims(claims)
             .subject(String.valueOf(userId))
             .issuedAt(new Date(System.currentTimeMillis()))
-            .expiration(new Date(System.currentTimeMillis() + 86400000L))
+            .expiration(new Date(System.currentTimeMillis() + jwtConfig.verificationExpiration()))
             .signWith(getSecretKey())
             .compact();
     }

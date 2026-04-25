@@ -18,13 +18,14 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CategoryEntity extends BaseEntity {
-    @Column(name = "name", unique = true)
+    @Column(name = "name", nullable = false, unique = true)
     private String name;
     @Column(name = "description")
     private String description;
-    @Column(name = "image")
+    @Column(name = "image", nullable = false)
     private String image;
-    @Column(name = "menu_item_status")
+    @Column(name = "menu_item_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private MenuItemStatus menuItemStatus;
 
     // version

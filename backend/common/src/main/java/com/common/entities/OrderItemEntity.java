@@ -18,9 +18,9 @@ import com.common.enums.OrderItemStatus;
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderItemEntity extends BaseEntity {
-    @Column(name = "order_id", insertable = false, updatable = false)
+    @Column(name = "order_id", nullable = false, insertable = false, updatable = false)
     private Integer orderId;
-    @Column(name = "menu_item_id", insertable = false, updatable = false)
+    @Column(name = "menu_item_id", nullable = false, insertable = false, updatable = false)
     private Integer menuItemId;
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
@@ -30,7 +30,8 @@ public class OrderItemEntity extends BaseEntity {
     private BigDecimal subTotal;
     @Column(name = "special_instructions")
     private String specialInstructions;
-    @Column(name = "order_item_status")
+    @Column(name = "order_item_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private OrderItemStatus orderItemStatus;
 
     // version

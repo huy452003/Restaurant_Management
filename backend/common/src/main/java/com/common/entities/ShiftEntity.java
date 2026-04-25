@@ -19,13 +19,14 @@ import com.common.enums.ShiftStatus;
 @NoArgsConstructor
 @AllArgsConstructor 
 public class ShiftEntity extends BaseEntity {
-    @Column(name = "shift_date")
+    @Column(name = "shift_date", nullable = false)
     private LocalDate shiftDate;
-    @Column(name = "start_time")
+    @Column(name = "start_time", nullable = false)
     private LocalDateTime startTime;
-    @Column(name = "end_time")
+    @Column(name = "end_time", nullable = false)
     private LocalDateTime endTime;
-    @Column(name = "shift_status")
+    @Column(name = "shift_status", nullable = false)
+    @Enumerated(EnumType.STRING)
     private ShiftStatus shiftStatus;
     @Column(name = "notes")
     private String notes;

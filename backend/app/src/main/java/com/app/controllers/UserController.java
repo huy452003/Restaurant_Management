@@ -29,11 +29,12 @@ import com.logging.services.LoggingService;
 
 import jakarta.validation.Valid;
 
-import com.common.models.user.LoginModel;
-import com.common.models.user.RegisterModel;
+import com.common.models.user.LoginRequestModel;
+import com.common.models.user.RegisterRequestModel;
 import com.common.models.user.UpdateUserNormalModel;
 import com.common.models.user.UserModel;
-import com.common.models.user.UserSecurityModel;
+import com.common.models.user.UserLoginModel;
+import com.common.models.user.UserRegisterModel;
 import com.common.models.PaginatedResponse;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
@@ -68,24 +69,44 @@ public class UserController {
             .build();
     }
 
-    // get all users - chỉ ADMIN và MANAGER
-    @GetMapping()
+    // filter and paginate users - chỉ ADMIN và MANAGER
+    @GetMapping("/filterAndPaginate")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "getAllFallback")
-    public ResponseEntity<Response<List<UserModel>>> getAll(
-        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage
-    ) {
+    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "filtersFallback")
+    public ResponseEntity<Response<PaginatedResponse<UserModel>>> filters(
+        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
+        @RequestParam(required = false) Integer id,
+        @RequestParam(required = false) String username,
+        @RequestParam(required = false) String fullname,
+        @RequestParam(required = false) String email,
+        @RequestParam(required = false) String phone,
+        @RequestParam(required = false) Gender gender,
+        @RequestParam(required = false) LocalDate birth,
+        @RequestParam(required = false) String address,
+        @RequestParam(required = false) UserRole role,
+        @RequestParam(required = false) UserStatus userStatus,
+        @PageableDefault(size = 5, sort = "id") Pageable pageable
+    ){
         Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("getAll", Collections.emptyList());
+        LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
+        
+        // Gọi service method với Pageable (optional)
+        Page<UserModel> userPage = userService.filters(
+            id, username, fullname, 
+            email, phone, gender, 
+            birth, address, role, userStatus,
+            pageable
+        );
 
-        List<UserModel> users = userService.getAll();
-        Response<List<UserModel>> response = new Response<>(
+        PaginatedResponse<UserModel> paginatedResponse = PaginatedResponse.of(userPage);
+
+        Response<PaginatedResponse<UserModel>> response = new Response<>(
             200,
-            messageSource.getMessage("response.message.getSuccess", null, locale),
+            messageSource.getMessage("response.message.filtersSuccess", null, locale),
             "userModel",
             null,
-            users
+            paginatedResponse
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
@@ -94,19 +115,19 @@ public class UserController {
     // login
     @PostMapping("/login")
     @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "loginFallback")
-    public ResponseEntity<Response<UserSecurityModel>> login(
+    public ResponseEntity<Response<UserLoginModel>> login(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @RequestBody @Valid LoginModel req
+        @RequestBody @Valid LoginRequestModel req
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
         LogContext logContext = getLogContext("login", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        UserSecurityModel loggedInUser = userService.login(req);
-        Response<UserSecurityModel> response = new Response<>(
+        UserLoginModel loggedInUser = userService.login(req);
+        Response<UserLoginModel> response = new Response<>(
             200,
             messageSource.getMessage("response.message.loginSuccess", null, locale),
-            "UserSecurityModel",
+            "UserLoginModel",
             null,
             loggedInUser
         );
@@ -142,19 +163,19 @@ public class UserController {
     // create users
     @PostMapping("/register")
     @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "createsFallback")
-    public ResponseEntity<Response<List<UserSecurityModel>>> creates(
+    public ResponseEntity<Response<List<UserRegisterModel>>> creates(
         @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @RequestBody @Valid List<RegisterModel> registers
+        @RequestBody @Valid List<RegisterRequestModel> registers
     ) {
         Locale locale = Locale.forLanguageTag(acceptLanguage);
         LogContext logContext = getLogContext("creates", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        List<UserSecurityModel> createdUsers = userService.creates(registers);
-        Response<List<UserSecurityModel>> response = new Response<>(
+        List<UserRegisterModel> createdUsers = userService.creates(registers);
+        Response<List<UserRegisterModel>> response = new Response<>(
             201,
             messageSource.getMessage("response.message.createSuccess", null, locale),
-            "UserSecurityModel",
+            "UserRegisterModel",
             null,
             createdUsers
         );
@@ -218,49 +239,6 @@ public class UserController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
-
-    // filter and paginate users - chỉ ADMIN và MANAGER
-    @GetMapping("/filterAndPaginate")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    @RateLimiter(name = "restaurant-management-read-controller", fallbackMethod = "filtersFallback")
-    public ResponseEntity<Response<PaginatedResponse<UserModel>>> filters(
-        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
-        @RequestParam(required = false) Integer id,
-        @RequestParam(required = false) String username,
-        @RequestParam(required = false) String fullname,
-        @RequestParam(required = false) String email,
-        @RequestParam(required = false) String phone,
-        @RequestParam(required = false) Gender gender,
-        @RequestParam(required = false) LocalDate birth,
-        @RequestParam(required = false) String address,
-        @RequestParam(required = false) UserRole role,
-        @RequestParam(required = false) UserStatus userStatus,
-        @PageableDefault(size = 5, sort = "id") Pageable pageable
-    ){
-        Locale locale = Locale.forLanguageTag(acceptLanguage);
-        LogContext logContext = getLogContext("filters", Collections.emptyList());
-        log.logInfo("is running, preparing to call service ...!", logContext);
-        
-        // Gọi service method với Pageable (optional)
-        Page<UserModel> userPage = userService.filters(
-            id, username, fullname, 
-            email, phone, gender, 
-            birth, address, role, userStatus,
-            pageable
-        );
-
-        PaginatedResponse<UserModel> paginatedResponse = PaginatedResponse.of(userPage);
-
-        Response<PaginatedResponse<UserModel>> response = new Response<>(
-            200,
-            messageSource.getMessage("response.message.filtersSuccess", null, locale),
-            "userModel",
-            null,
-            paginatedResponse
-        );
-        log.logInfo("completed, returning response ...!", logContext);
-        return ResponseEntity.status(response.statusCode()).body(response);
-    }
     
     // verify and activate user - public
     @PutMapping("/public/verify")
@@ -285,13 +263,39 @@ public class UserController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
+    // resend verification token
+    @PostMapping("/public/resendVerificationToken")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "resendVerificationTokenFallback")
+    public ResponseEntity<Response<String>> resendVerificationToken(
+        @RequestHeader(value = "Accept-Language", defaultValue = "en") String acceptLanguage,
+        @RequestParam Integer userId
+    ) {
+        Locale locale = Locale.forLanguageTag(acceptLanguage);
+        LogContext logContext = getLogContext("resendVerificationToken", Collections.singletonList(userId));
+        log.logInfo("is running, preparing to call service ...!", logContext);
+
+        String verificationToken = userService.resendVerificationToken(userId);
+        Response<String> response = new Response<>(
+            200,
+            messageSource.getMessage("response.message.resendVerificationTokenSuccess", null, locale),
+            "userModel",
+            null,
+            "verificationToken: " + verificationToken
+        );
+        log.logInfo("completed, returning response ...!", logContext);
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
     //Fallback method *************************************************************//
 
-    // getAllFallback
+    // filtersFallback
     @SuppressWarnings("unused")
-    private ResponseEntity<Response<List<UserModel>>> getAllFallback(
-        String acceptLanguage, Exception e
-    ) {
+    private ResponseEntity<Response<PaginatedResponse<UserModel>>> filtersFallback(
+        String acceptLanguage, Integer id, String username,
+        String fullname, String email, String phone,
+        Gender gender, LocalDate birth, String address,
+        UserRole role, UserStatus userStatus, Pageable pageable, Exception e
+    ){
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
@@ -299,16 +303,16 @@ public class UserController {
         
         // Rate limit exceeded hoặc exception khác
         TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for getAll endpoint", 
-            "getAll"
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for filters endpoint", 
+            "filters"
         );
         throw error;
     }
-
+    
     // loginFallback
     @SuppressWarnings("unused")
-    private ResponseEntity<Response<UserSecurityModel>> loginFallback(
-        String acceptLanguage, LoginModel req, Exception e
+    private ResponseEntity<Response<UserLoginModel>> loginFallback(
+        String acceptLanguage, LoginRequestModel req, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
@@ -343,8 +347,8 @@ public class UserController {
 
     // createsFallback
     @SuppressWarnings("unused")
-    private ResponseEntity<Response<List<UserSecurityModel>>> createsFallback(
-        String acceptLanguage, List<RegisterModel> registers, Exception e
+    private ResponseEntity<Response<List<UserRegisterModel>>> createsFallback(
+        String acceptLanguage, List<RegisterRequestModel> registers, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
@@ -394,27 +398,6 @@ public class UserController {
         );
         throw error;
     }
-
-    // filtersFallback
-    @SuppressWarnings("unused")
-    private ResponseEntity<Response<PaginatedResponse<UserModel>>> filtersFallback(
-        String acceptLanguage, Integer id, String username,
-        String fullname, String email, String phone,
-        Gender gender, LocalDate birth, String address,
-        UserRole role, UserStatus userStatus, Pageable pageable, Exception e
-    ){
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        
-        // Rate limit exceeded hoặc exception khác
-        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for filters endpoint", 
-            "filters"
-        );
-        throw error;
-    }
     
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
@@ -434,6 +417,24 @@ public class UserController {
         throw error;
     }
 
+    // resendVerificationTokenFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<String>> resendVerificationTokenFallback(
+        String acceptLanguage, Integer userId, Exception e
+    ) {
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        
+        // Rate limit exceeded hoặc exception khác
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for resendVerificationToken endpoint", 
+            "resendVerificationToken"
+        );
+        throw error;
+    }
+    
     //Fallback method *************************************************************//
 
     // Helper method để check business exception
