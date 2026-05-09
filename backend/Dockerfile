@@ -7,9 +7,11 @@ RUN mvn -pl app -am package -DskipTests -B
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 RUN useradd --create-home --shell /usr/sbin/nologin appuser
+RUN mkdir -p /app/logs && chown appuser:appuser /app/logs
 COPY --from=build /build/app/target/*-exec.war /app/app.war
 RUN chown appuser:appuser /app/app.war
 USER appuser
+ENV SPRING_PROFILES_ACTIVE=prod
 ENV PORT=8080
 EXPOSE 8080
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=70.0"

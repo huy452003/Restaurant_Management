@@ -1,2 +1,0 @@
-ALTER TABLE menu_items
-    MODIFY COLUMN image VARCHAR(200) NOT NULL;

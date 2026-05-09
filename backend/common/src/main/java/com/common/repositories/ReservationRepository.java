@@ -33,9 +33,9 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
     List<ReservationEntity> findByCustomerEmail(String email);
     
     // Tìm reservations trong khoảng thời gian
-    @Query("SELECT r FROM ReservationEntity r WHERE FUNCTION('DATE', r.reservationTs) = :date " +
+    @Query("SELECT r FROM ReservationEntity r WHERE CAST(r.reservationTs AS date) = :date " +
            "AND r.table.tableNumber = :tableNumber " +
-           "AND r.reservationStatus != :cancelledStatus")
+           "AND r.reservationStatus <> :cancelledStatus")
     List<ReservationEntity> findActiveReservationsByTableAndDate(
         @Param("date") LocalDate date,
         @Param("tableNumber") Integer tableNumber,

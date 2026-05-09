@@ -21,7 +21,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Integer>, Jp
     
     // Tìm order cuối cùng trong ngày để generate số tiếp theo
     // Query: Tìm order có orderNumber bắt đầu bằng prefix, sắp xếp theo id DESC, lấy 1 record đầu tiên
-    @Query("SELECT o FROM OrderEntity o WHERE o.orderNumber LIKE :prefix% ORDER BY o.id DESC")
+    @Query("SELECT o FROM OrderEntity o WHERE o.orderNumber LIKE CONCAT(:prefix, '%') ORDER BY o.id DESC")
     Optional<OrderEntity> findLastOrderByPrefix(@Param("prefix") String prefix);
     
     // Tìm orders theo status
