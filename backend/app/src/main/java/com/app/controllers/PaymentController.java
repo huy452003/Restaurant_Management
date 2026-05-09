@@ -115,7 +115,7 @@ public class PaymentController {
     @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
     public ResponseEntity<Response<PaymentModel>> complete(
         Locale locale,
-        @PathVariable Integer paymentId
+        @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer paymentId
     ) {
         LogContext logContext = getLogContext("complete", Collections.singletonList(paymentId));
         log.logInfo("is running, preparing to call service ...!", logContext);

@@ -27,7 +27,6 @@ import com.common.models.orderItem.OrderItemCustomerUpdateModel;
 import com.common.models.orderItem.OrderItemModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
 import com.common.models.Response;
-import com.handle_exceptions.ValidationExceptionHandle;
 import com.logging.services.LoggingService;
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;

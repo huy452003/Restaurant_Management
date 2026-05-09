@@ -25,6 +25,6 @@ public class PaymentCreateRequestModel {
     @Enumerated(EnumType.STRING)
     private PaymentMethod paymentMethod;
     @NotNull(message = "validate.payment.amount.required")
-    @Min(value = 0, message = "validate.payment.amount.min")
+    @DecimalMin(value = "0.01", inclusive = true, message = "validate.payment.amount.min")
     private BigDecimal amount;
 }
