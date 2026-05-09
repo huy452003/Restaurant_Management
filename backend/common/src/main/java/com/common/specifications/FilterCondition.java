@@ -1,6 +1,7 @@
 package com.common.specifications;
 
 import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Path;
 
 import lombok.Data;
 
@@ -26,11 +27,20 @@ public class FilterCondition<T> {
 
     public Specification<T> toSpecification() {
         return (root, query, criteriaBuilder) -> {
+            Path<?> fieldPath = resolvePath(root, field);
             if (matchType == FilterMatchType.LIKE_IGNORE_CASE) {
                 String searchValue = "%" + String.valueOf(value).toLowerCase().trim() + "%";
-                return criteriaBuilder.like(criteriaBuilder.lower(root.get(field)), searchValue);
+                return criteriaBuilder.like(criteriaBuilder.lower(fieldPath.as(String.class)), searchValue);
             }
-            return criteriaBuilder.equal(root.get(field), value);
+            return criteriaBuilder.equal(fieldPath, value);
         };
+    }
+
+    private Path<?> resolvePath(Path<?> root, String fieldPath) {
+        Path<?> current = root;
+        for (String part : fieldPath.split("\\.")) {
+            current = current.get(part);
+        }
+        return current;
     }
 }

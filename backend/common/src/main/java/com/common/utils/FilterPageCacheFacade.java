@@ -26,7 +26,11 @@ public final class FilterPageCacheFacade {
             return null;
         }
         // tạo key cache
-        return FilterCacheKeyUtils.buildCacheKey(keyPrefix, conditions, pageable);
+        return FilterCacheKeyUtils.build(keyPrefix, conditions, pageable);
+    }
+
+    public static void clearFirstPageCache(RedisTemplate<String, Object> redisTemplate, String keyPrefix) {
+        FilterCacheKeyUtils.clear(redisTemplate, keyPrefix);
     }
 
     public static <T> Page<T> readFirstPageCache(

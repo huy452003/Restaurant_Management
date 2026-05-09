@@ -61,7 +61,7 @@ public class JwtService {
     }
 
     // tạo token xác thực với claims
-    public String generateVeruficationToken(Integer userId) {
+    public String generateVerificationToken(Integer userId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", "verification");
         claims.put("userId", userId);

@@ -9,7 +9,10 @@ import com.common.models.Response;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import java.util.Locale;
-import org.springframework.context.i18n.LocaleContextHolder;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+import org.springframework.web.servlet.LocaleResolver;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -18,6 +21,7 @@ import java.util.List;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import jakarta.validation.ConstraintViolationException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
@@ -25,18 +29,33 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.access.AccessDeniedException;
 import java.util.ArrayList;
 import org.springframework.core.annotation.Order;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.springframework.util.StringUtils;
 
 @RestControllerAdvice
 @Order(1) // Độ ưu tiên cao để catch DataIntegrityViolationException trước handler Exception tổng quát
 public class CustomExceptionHandler {
     @Autowired
     MessageSource messageSource;
-    
+    @Autowired
+    private LocaleResolver localeResolver;
+
+    /** Giống DispatcherServlet: luôn đọc Accept-Language qua LocaleResolver, tránh rơi về Locale.getDefault() của JVM. */
+    private Locale resolveLocale(HttpServletRequest request) {
+        if (request != null && localeResolver != null) {
+            Locale l = localeResolver.resolveLocale(request);
+            return l != null ? l : Locale.ENGLISH;
+        }
+        return Locale.ENGLISH;
+    }
+
     // Not Found Exception Handler
     @ResponseStatus(HttpStatus.NOT_FOUND)
     @ExceptionHandler(NotFoundExceptionHandle.class)
-    ResponseEntity<Response<?>> notFoundExceptionHandle(NotFoundExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> notFoundExceptionHandle(NotFoundExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("notFoundItems", e.getNotFounds());
@@ -55,8 +74,8 @@ public class CustomExceptionHandler {
     // Conflict Exception Handler
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(ConflictExceptionHandle.class)
-    ResponseEntity<Response<?>> conflictExceptionHandle(ConflictExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> conflictExceptionHandle(ConflictExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("conflictItems", e.getConflicts());
@@ -72,17 +91,92 @@ public class CustomExceptionHandler {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-    // Data Integrity Violation Exception Handler (Duplicate unique constraint)
+    private static final Pattern MYSQL_FK_COLUMN = Pattern.compile(
+        "FOREIGN KEY\\s*\\(\\s*`([^`]+)`\\s*\\)",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    /** FK / tham chiếu không hợp lệ ≠ trùng unique — HTTP 409 chỉ giữ cho duplicate/conflict có chủ đích. */
+    private static boolean isForeignKeyOrReferenceViolation(CharSequence msg) {
+        if (msg == null || msg.length() == 0) {
+            return false;
+        }
+        String m = msg.toString().toLowerCase();
+        return m.contains("foreign key constraint")
+            || m.contains("a foreign key constraint fails")
+            || m.contains("cannot add or update a child row")
+            || m.contains("cannot delete or update a parent row")
+            || m.contains("violates foreign key constraint");
+    }
+
+    private static String sqlColumnHintFromForeignKeyMessage(String fullMessage) {
+        if (!StringUtils.hasText(fullMessage)) {
+            return null;
+        }
+        Matcher matcher = MYSQL_FK_COLUMN.matcher(fullMessage);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    /** Chuyển category_name → categoryName để khớp tên field trên JSON API. */
+    private static String sqlColumnToApiField(String sqlColumn) {
+        if (!StringUtils.hasText(sqlColumn)) {
+            return null;
+        }
+        String[] parts = sqlColumn.trim().split("_");
+        StringBuilder camel = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            if (parts[i].isEmpty()) {
+                continue;
+            }
+            camel.append(Character.toUpperCase(parts[i].charAt(0)));
+            if (parts[i].length() > 1) {
+                camel.append(parts[i], 1, parts[i].length());
+            }
+        }
+        return camel.toString();
+    }
+
+    // Data Integrity Violation: duplicate unique → 409; foreign key / invalid reference → 400
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(DataIntegrityViolationException.class)
-    ResponseEntity<Response<?>> dataIntegrityViolationExceptionHandle(DataIntegrityViolationException e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> dataIntegrityViolationExceptionHandle(DataIntegrityViolationException e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         String errorMessage = e.getMessage();
         String rootCauseMessage = e.getRootCause() != null ? e.getRootCause().getMessage() : null;
         String fullMessage = rootCauseMessage != null ? rootCauseMessage : errorMessage;
-        
+
+        if (isForeignKeyOrReferenceViolation(fullMessage)) {
+            String sqlColumn = sqlColumnHintFromForeignKeyMessage(fullMessage);
+            String apiField = sqlColumnToApiField(sqlColumn);
+            errors.put(
+                "detailMessage",
+                fullMessage != null ? fullMessage : e.getMessage()
+            );
+            List<Map<String, Object>> invalidRefs = new ArrayList<>();
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("field", apiField != null ? apiField : "reference");
+            ref.put(
+                "message",
+                messageSource.getMessage("response.error.foreignKeyViolation.detail", null, locale)
+            );
+            invalidRefs.add(ref);
+            errors.put("invalidReferences", invalidRefs);
+
+            Response<?> fkResponse = new Response<>(
+                400,
+                messageSource.getMessage("response.error.foreignKeyViolation", null, locale),
+                "ExceptionHandle",
+                errors,
+                null
+            );
+            return ResponseEntity.badRequest().body(fkResponse);
+        }
+
         String duplicateField = "uniqueField";
         String duplicateValue = null;
         
@@ -158,8 +252,8 @@ public class CustomExceptionHandler {
     // Validation Exception Handler (cho validation @RequestBody và method parameter)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler({MethodArgumentNotValidException.class, HandlerMethodValidationException.class})
-    ResponseEntity<Response<?>> handleValidation(Exception e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> handleValidation(Exception e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
         Map<String, Object> errors = new LinkedHashMap<>();
 
         if (e instanceof MethodArgumentNotValidException) {
@@ -209,16 +303,50 @@ public class CustomExceptionHandler {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
+    // ConstraintViolation Exception Handler (cho validation ở method-level như @Validated)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(ConstraintViolationException.class)
+    ResponseEntity<Response<?>> handleConstraintViolation(ConstraintViolationException e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
+        Map<String, Object> errors = new LinkedHashMap<>();
+
+        e.getConstraintViolations().forEach(violation -> {
+            String fieldPath = violation.getPropertyPath() != null ? violation.getPropertyPath().toString() : "field";
+            String key = violation.getMessage();
+            if (key != null && key.startsWith("{") && key.endsWith("}")) {
+                key = key.substring(1, key.length() - 1);
+            }
+            String msg = messageSource.getMessage(
+                key != null ? key : fieldPath,
+                null,
+                key != null ? key : fieldPath,
+                locale
+            );
+            errors.put(fieldPath, msg);
+        });
+
+        Response<?> response = new Response<>(
+            400,
+            messageSource.getMessage("response.error.validateFailed", null, locale),
+            "ExceptionHandle",
+            errors,
+            null
+        );
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
     // Custom Validation Exception Handler (cho validation business logic)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(ValidationExceptionHandle.class)
-    ResponseEntity<Response<?>> validationExceptionHandle(ValidationExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> validationExceptionHandle(ValidationExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
         Map<String, Object> errors = new LinkedHashMap<>();
+        errors.put("detailMessage", e.getMessage());
 
+        List<Object> nonMapRefs = new ArrayList<>();
         // Định dạng: field -> message (đồng nhất với các handler validation khác nhau)
         if(e.getInvalidFields() != null && !e.getInvalidFields().isEmpty()){
-            e.getInvalidFields().forEach(field -> {
+            for(Object field : e.getInvalidFields()) {
                 if (field instanceof Map) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> fieldMap = (Map<String, Object>) field;
@@ -226,11 +354,12 @@ public class CustomExceptionHandler {
                     String message = fieldMap.get("message") != null ? fieldMap.get("message").toString() : e.getMessage();
                     errors.put(fieldName, message);
                 } else {
-                    errors.put("error", field.toString());
+                    nonMapRefs.add(field);
                 }
-            });
-        } else {
-            errors.put("error", e.getMessage());
+            }
+            if(!nonMapRefs.isEmpty()) {
+                errors.put("invalidFieldRefs", nonMapRefs);
+            }
         }
 
         Response<?> response = new Response<>(
@@ -246,8 +375,8 @@ public class CustomExceptionHandler {
     // Invalid Format Exception Handler
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<Response<?>> handleInvalidFormat(HttpMessageNotReadableException ex) {
-        Locale locale = LocaleContextHolder.getLocale();
+    public ResponseEntity<Response<?>> handleInvalidFormat(HttpMessageNotReadableException ex, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         Throwable cause = ex.getMostSpecificCause();
@@ -290,8 +419,8 @@ public class CustomExceptionHandler {
     // Unauthorized Exception Handler
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     @ExceptionHandler(UnauthorizedExceptionHandle.class)
-    ResponseEntity<Response<?>> unauthorizedExceptionHandle(UnauthorizedExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> unauthorizedExceptionHandle(UnauthorizedExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("Error", e.getMessage());
@@ -309,8 +438,8 @@ public class CustomExceptionHandler {
     // Forbidden Exception Handler
     @ResponseStatus(HttpStatus.FORBIDDEN)
     @ExceptionHandler(ForbiddenExceptionHandle.class)
-    ResponseEntity<Response<?>> forbiddenExceptionHandle(ForbiddenExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> forbiddenExceptionHandle(ForbiddenExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("Error", e.getMessage());
@@ -331,8 +460,8 @@ public class CustomExceptionHandler {
     // Access Denied Exception Handler (Spring Security - khi user không có quyền truy cập)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     @ExceptionHandler(AccessDeniedException.class)
-    ResponseEntity<Response<?>> accessDeniedExceptionHandle(AccessDeniedException e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> accessDeniedExceptionHandle(AccessDeniedException e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put(
@@ -352,8 +481,8 @@ public class CustomExceptionHandler {
     // Service Unavailable Exception Handler
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
     @ExceptionHandler(ServiceUnavailableExceptionHandle.class)
-    ResponseEntity<Response<?>> serviceUnavailableExceptionHandle(ServiceUnavailableExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> serviceUnavailableExceptionHandle(ServiceUnavailableExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> errors = new HashMap<>();
         errors.put("Error", e.getMessage());
@@ -371,8 +500,8 @@ public class CustomExceptionHandler {
     // Too Many Requests Exception Handler
     @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
     @ExceptionHandler(TooManyRequestsExceptionHandle.class)
-    ResponseEntity<Response<?>> tooManyRequestsExceptionHandler(TooManyRequestsExceptionHandle e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> tooManyRequestsExceptionHandler(TooManyRequestsExceptionHandle e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> error = new HashMap<>();
         error.put("Error", e.getMessage());
@@ -390,8 +519,8 @@ public class CustomExceptionHandler {
     // Exception Handler
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     @ExceptionHandler(Exception.class)
-    ResponseEntity<Response<?>> exceptionHandler(Exception e) {
-        Locale locale = LocaleContextHolder.getLocale();
+    ResponseEntity<Response<?>> exceptionHandler(Exception e, HttpServletRequest request) {
+        Locale locale = resolveLocale(request);
 
         Map<String, Object> error = new HashMap<>();
         error.put("Error", e.getMessage());

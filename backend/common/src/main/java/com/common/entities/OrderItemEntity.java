@@ -18,10 +18,6 @@ import com.common.enums.OrderItemStatus;
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderItemEntity extends BaseEntity {
-    @Column(name = "order_id", nullable = false, insertable = false, updatable = false)
-    private Integer orderId;
-    @Column(name = "menu_item_id", nullable = false, insertable = false, updatable = false)
-    private Integer menuItemId;
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
     @Column(name = "unit_price", nullable = false)

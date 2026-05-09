@@ -7,7 +7,7 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
-import com.common.enums.MenuItemStatus;
+import com.common.enums.CategoryStatus;
 
 import java.util.List;
 
@@ -24,9 +24,9 @@ public class CategoryEntity extends BaseEntity {
     private String description;
     @Column(name = "image", nullable = false)
     private String image;
-    @Column(name = "menu_item_status", nullable = false)
+    @Column(name = "category_status", nullable = false)
     @Enumerated(EnumType.STRING)
-    private MenuItemStatus menuItemStatus;
+    private CategoryStatus categoryStatus;
 
     // version
     @Version

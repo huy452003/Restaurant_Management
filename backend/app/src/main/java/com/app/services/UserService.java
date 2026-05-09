@@ -26,7 +26,7 @@ public interface UserService {
     );
     List<UserRegisterModel> creates(List<RegisterRequestModel> registers);
     UserLoginModel login(LoginRequestModel req);
-    void logout(String username);
+    void logout();
     UserModel updateNormal(UpdateUserNormalModel update, Integer userId);
     List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds);
     UserModel verifyAndActivate(String verificationToken);

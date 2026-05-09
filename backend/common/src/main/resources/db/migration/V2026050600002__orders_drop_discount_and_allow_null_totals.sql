@@ -1,0 +1,7 @@
+ALTER TABLE orders
+    DROP COLUMN discount;
+
+ALTER TABLE orders
+    MODIFY COLUMN sub_total DECIMAL(10,2) NULL,
+    MODIFY COLUMN tax DECIMAL(10,2) NULL,
+    MODIFY COLUMN total_amount DECIMAL(10,2) NULL;

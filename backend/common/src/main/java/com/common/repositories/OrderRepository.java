@@ -25,7 +25,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Integer>, Jp
     List<OrderEntity> findByOrderStatus(OrderStatus orderStatus);
     
     // Tìm orders theo table
-    List<OrderEntity> findByTableId(Integer tableId);
+    List<OrderEntity> findByTable_TableNumber(Integer tableNumber);
     
     // Tìm orders theo waiter
     List<OrderEntity> findByWaiterId(Integer waiterId);

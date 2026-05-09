@@ -6,23 +6,20 @@ import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-import com.common.models.user.UpdateUserForAdminModel;
-
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
-
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class UpdateUserForAdminRequest {
+public class WrapperUpdateRequest<T> {
     @NotNull
     @NotEmpty
-    private List<Integer> userIds;
+    private List<Integer> ids;
 
     @NotNull
     @NotEmpty
     @Valid
-    private List<UpdateUserForAdminModel> updates;
+    private List<T> updates;
 
 }

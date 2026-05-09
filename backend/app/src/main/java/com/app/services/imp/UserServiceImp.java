@@ -1,6 +1,7 @@
 package com.app.services.imp;
 
 import com.app.services.UserService;
+import com.app.utils.UserEntityUtils;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -8,6 +9,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.stream.Collectors;
@@ -21,6 +23,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -28,6 +31,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.common.models.user.LoginRequestModel;
@@ -42,7 +46,6 @@ import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.entities.UserEntity;
 import com.common.utils.AgeUtils;
-import com.common.utils.FilterCacheClearUtils;
 import com.common.utils.FilterPageCacheFacade;
 import com.common.enums.Gender;
 import com.common.specifications.FilterCondition;
@@ -59,12 +62,15 @@ import com.security.configurations.JwtConfig;
 import com.security.services.BlackListService;
 import com.security.services.JwtService;
 
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 @Service
 public class UserServiceImp implements UserService {
     @Autowired
     private UserRepository userRepository;
+    @Autowired
+    private UserEntityUtils userEntityUtils;
     @Autowired
     private LoggingService log;
     @Autowired
@@ -131,6 +137,7 @@ public class UserServiceImp implements UserService {
         }
         log.logInfo("Not found users in cache, filtering users with conditions: " + conditions, logContext);
 
+        // lấy data từ db, nếu không có conditions thì getAll, nếu có thì filter theo conditions
         Page<UserEntity> pageEntities;
         if(conditions.isEmpty()){
             pageEntities = userRepository.findAll(pageable);
@@ -140,24 +147,10 @@ public class UserServiceImp implements UserService {
             pageEntities = userRepository.findAll(spec, pageable);
         }
         
-        if(pageEntities.isEmpty()){
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "No users found with the given conditions or pagination",
-                Collections.emptyList(),
-                "UserModel"
-            );
-            log.logError("No users found with conditions or pagination", e, logContext);
-            throw e;
-        }
-        
         // Map từ Entity sang Model và tính age
-        List<UserModel> pageDatas = pageEntities.getContent().stream().map(userEntity -> {
-            UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-            if(userEntity.getBirth() != null){
-                userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-            }
-            return userModel;
-        }).collect(Collectors.toList());
+        List<UserModel> pageDatas = pageEntities.getContent().stream().map(
+            this::toUserModel
+        ).collect(Collectors.toList());
         
         // Tạo Page<UserModel> từ List<UserModel> và thông tin pagination từ Page<UserEntity>
         Page<UserModel> userModelPage = new PageImpl<>(
@@ -186,9 +179,18 @@ public class UserServiceImp implements UserService {
         log.logInfo("Logging in user ...!", logContext);
 
         // xác thực username và password
-        authenticationManager.authenticate(
-            new UsernamePasswordAuthenticationToken(req.getUsername(), req.getPassword())
-        );
+        try {
+            authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(req.getUsername(), req.getPassword())
+            );
+        } catch (BadCredentialsException ex) {
+            UnauthorizedExceptionHandle e = new UnauthorizedExceptionHandle(
+                "Invalid username or password",
+                "UserLoginModel"
+            );
+            log.logError(e.getMessage(), ex, logContext);
+            throw e;
+        }
 
         // query từ db
         UserEntity userEntity = userRepository.findByUsername(req.getUsername()).orElseThrow(() -> {
@@ -239,24 +241,17 @@ public class UserServiceImp implements UserService {
     // logout
     @Override
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "logoutFallback")
-    public void logout(String username) {
+    public void logout() {
         LogContext logContext = getLogContext("logout", Collections.emptyList());
         log.logInfo("User is logging out ...!", logContext);
 
-        // kiểm tra username có tồn tại trong db không
-        UserEntity foundUser = userRepository.findByUsername(username).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Not found user with username: " + username,
-                 Collections.emptyList(),
-                 "userModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
+        UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
+            "userModel", logContext, log
+        );
 
         // thêm token vào blacklist (revoke token)
-        blackListService.blackListUser(foundUser.getUsername());
-        log.logInfo("Completed, logged out user: " + foundUser.getUsername() + " and blacklisted token", logContext);
+        blackListService.blackListUser(currentUser.getUsername());
+        log.logInfo("Completed, logged out user: " + currentUser.getUsername() + " and blacklisted token", logContext);
     }
 
     // create users
@@ -335,7 +330,7 @@ public class UserServiceImp implements UserService {
         userRepository.saveAll(userEntities);   
 
         // xóa cache filter
-        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
         log.logInfo("Deleted filter caches after create", logContext);
         
         log.logInfo("completed, created " + userEntities.size() + " users with PENDING status", logContext);
@@ -347,7 +342,7 @@ public class UserServiceImp implements UserService {
             userRegisterModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
             userRegisterModel.setRefreshToken(jwtService.generateRefreshToken(claims, userEntity));
             userRegisterModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
-            userRegisterModel.setVerificationToken(jwtService.generateVeruficationToken(userEntity.getId()));
+            userRegisterModel.setVerificationToken(jwtService.generateVerificationToken(userEntity.getId()));
             userRegisterModel.setVerificationTokenExpires(formatExpirationTime(jwtConfig.verificationExpiration()));
             if (userEntity.getBirth() != null) {
                 userRegisterModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
@@ -364,20 +359,14 @@ public class UserServiceImp implements UserService {
     public UserModel updateNormal(UpdateUserNormalModel update, Integer userId) {
         LogContext logContext = getLogContext(
             "updateNormal", 
-            Collections.singletonList(userId)
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
         );       
         log.logInfo("User with id " + userId + " is updating their profile ...!", logContext);
 
-        // Tìm user từ userId
-        UserEntity currentUser = userRepository.findById(userId).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "User not found with id: " + userId,
-                Collections.singletonList(userId),
-                "userModel"
-            );
-            log.logError("User not found", e, logContext);
-            return e;
-        });
+        // lấy user đang đăng nhập
+        UserEntity currentUser = userEntityUtils.requireAuthenticatedUserById(
+            userId, "UserModel", logContext, log
+        );
 
         // Normalize email
         update.setEmail(update.getEmail().toLowerCase().trim());
@@ -386,7 +375,7 @@ public class UserServiceImp implements UserService {
         List<Object> conflicts = new ArrayList<>();
         
         // Check email: CHỈ check duplicate khi email THAY ĐỔI (khác với email hiện tại)
-        if (!update.getEmail().equals(currentUser.getEmail())) {
+        if (!Objects.equals(update.getEmail(), currentUser.getEmail())) {
             if (userRepository.existsByEmail(update.getEmail())) {
                 Map<String, Object> conflict = new HashMap<>();
                 conflict.put("field", "email");
@@ -397,7 +386,7 @@ public class UserServiceImp implements UserService {
         }
         
         // Check phone: CHỈ check duplicate khi phone THAY ĐỔI (khác với phone hiện tại)
-        if (!update.getPhone().equals(currentUser.getPhone())) {
+        if (!Objects.equals(update.getPhone(), currentUser.getPhone())) {
             if (userRepository.existsByPhone(update.getPhone())) {
                 Map<String, Object> conflict = new HashMap<>();
                 conflict.put("field", "phone");
@@ -418,12 +407,12 @@ public class UserServiceImp implements UserService {
         }
 
         // Check xem có thay đổi gì không
-        boolean hasChanges = !update.getFullname().equals(currentUser.getFullname()) ||
-                             !update.getEmail().equals(currentUser.getEmail()) ||
-                             !update.getPhone().equals(currentUser.getPhone()) ||
-                             !update.getGender().equals(currentUser.getGender()) ||
-                             !update.getBirth().equals(currentUser.getBirth()) ||
-                             !update.getAddress().equals(currentUser.getAddress());
+        boolean hasChanges = !Objects.equals(update.getFullname(), currentUser.getFullname()) ||
+                             !Objects.equals(update.getEmail(), currentUser.getEmail()) ||
+                             !Objects.equals(update.getPhone(), currentUser.getPhone()) ||
+                             !Objects.equals(update.getGender(), currentUser.getGender()) ||
+                             !Objects.equals(update.getBirth(), currentUser.getBirth()) ||
+                             !Objects.equals(update.getAddress(), currentUser.getAddress());
         
         if (hasChanges) {
             // Map các field từ update model vào UserEntity
@@ -435,15 +424,11 @@ public class UserServiceImp implements UserService {
         }
 
         // xóa cache filter
-        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
         log.logInfo("Deleted filter caches after update", logContext);
         
         // Return user đã update
-        UserModel userModel = modelMapper.map(currentUser, UserModel.class);
-        if (currentUser.getBirth() != null) {
-            userModel.setAge(AgeUtils.calculateAge(currentUser.getBirth()));
-        }
-        return userModel;
+        return toUserModel(currentUser);
     }
 
     // update user for admin
@@ -470,16 +455,9 @@ public class UserServiceImp implements UserService {
         }
 
         // tìm các user có trong userIds
-        List<UserEntity> foundUsers = userIds.stream().map(id -> userRepository.findById(id).orElseThrow(() -> {
-                NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                    "User not found with id: " + id,
-                    Collections.singletonList(id),
-                    "UserModel"
-                );
-                log.logError(e.getMessage(), e, logContext);
-                return e;
-            })
-        ).collect(Collectors.toList());
+        List<UserEntity> foundUsers = userIds.stream()
+            .map(id -> userEntityUtils.requireById(id, "UserModel", logContext, log))
+            .collect(Collectors.toList());
 
         // Check nếu có user muốn update role thành ADMIN nhưng đã có ADMIN khác trong hệ thống
         // chỉ khi user hiện tại là admin hoặc đang không có admin trong hệ thống -> bỏ qua check
@@ -511,7 +489,7 @@ public class UserServiceImp implements UserService {
             update.setUsername(update.getUsername().toLowerCase().trim());
             update.setEmail(update.getEmail().toLowerCase().trim());
 
-            if(!update.getUsername().equals(currentUser.getUsername())){
+            if(!Objects.equals(update.getUsername(), currentUser.getUsername())){
                 if(userRepository.existsByUsername(update.getUsername())){
                     Map<String, Object> conflict = new HashMap<>();
                     conflict.put("field", "username");
@@ -520,7 +498,7 @@ public class UserServiceImp implements UserService {
                     conflicts.add(conflict);
                 }
             }
-            if(!update.getEmail().equals(currentUser.getEmail())){
+            if(!Objects.equals(update.getEmail(), currentUser.getEmail())){
                 if(userRepository.existsByEmail(update.getEmail())){
                     Map<String, Object> conflict = new HashMap<>();
                     conflict.put("field", "email");
@@ -529,7 +507,7 @@ public class UserServiceImp implements UserService {
                     conflicts.add(conflict);
                 }
             }
-            if(!update.getPhone().equals(currentUser.getPhone())){
+            if(!Objects.equals(update.getPhone(), currentUser.getPhone())){
                 if(userRepository.existsByPhone(update.getPhone())){
                     Map<String, Object> conflict = new HashMap<>();
                     conflict.put("field", "phone");
@@ -559,15 +537,15 @@ public class UserServiceImp implements UserService {
             UpdateUserForAdminModel update = updateIterator.next();
             UserEntity currentUser = userIterator.next();
 
-            boolean hasChanges = !update.getUsername().equals(currentUser.getUsername()) ||
-                                 !update.getFullname().equals(currentUser.getFullname()) ||
-                                 !update.getEmail().equals(currentUser.getEmail()) ||
-                                 !update.getPhone().equals(currentUser.getPhone()) ||
-                                 !update.getGender().equals(currentUser.getGender()) ||
-                                 !update.getBirth().equals(currentUser.getBirth()) ||
-                                 !update.getAddress().equals(currentUser.getAddress()) ||
-                                 !update.getRole().equals(currentUser.getRole()) ||
-                                 !update.getUserStatus().equals(currentUser.getUserStatus());
+            boolean hasChanges = !Objects.equals(update.getUsername(), currentUser.getUsername()) ||
+                                 !Objects.equals(update.getFullname(), currentUser.getFullname()) ||
+                                 !Objects.equals(update.getEmail(), currentUser.getEmail()) ||
+                                 !Objects.equals(update.getPhone(), currentUser.getPhone()) ||
+                                 !Objects.equals(update.getGender(), currentUser.getGender()) ||
+                                 !Objects.equals(update.getBirth(), currentUser.getBirth()) ||
+                                 !Objects.equals(update.getAddress(), currentUser.getAddress()) ||
+                                 !Objects.equals(update.getRole(), currentUser.getRole()) ||
+                                 !Objects.equals(update.getUserStatus(), currentUser.getUserStatus());
 
             if(hasChanges){
                 modelMapper.map(update, currentUser);
@@ -583,17 +561,12 @@ public class UserServiceImp implements UserService {
         }
 
         // xóa cache filter
-        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
         log.logInfo("Deleted filter caches after update", logContext);
 
         // Return tất cả users (bao gồm cả những user không có thay đổi)
-        return foundUsers.stream().map(userEntity -> {
-                UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-                if(userEntity.getBirth() != null){
-                    userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-                }
-                return userModel;
-            }
+        return foundUsers.stream().map(
+            this::toUserModel
         ).collect(Collectors.toList());
     }
 
@@ -606,20 +579,11 @@ public class UserServiceImp implements UserService {
         Integer userId = jwtService.extractUserIdFromVerificationToken(verificationToken);
         LogContext logContext = getLogContext(
             "verifyAndActivate", 
-            Collections.singletonList(userId)
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
         );
         log.logInfo("Verifying user with verification token ...!", logContext);
 
-        UserEntity userEntity = userRepository.findById(userId)
-            .orElseThrow(() -> {
-                NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                    "User not found with id: " + userId,
-                    Collections.singletonList(userId),
-                    "userModel"
-                );
-                log.logError("User not found", e, logContext);
-                return e;
-            });
+        UserEntity userEntity = userEntityUtils.requireById(userId, "userModel", logContext, log);
 
         // Kiểm tra status phải là PENDING
         if (userEntity.getUserStatus() != UserStatus.PENDING) {
@@ -637,16 +601,12 @@ public class UserServiceImp implements UserService {
         userRepository.save(userEntity);
 
         // xóa cache filter
-        FilterCacheClearUtils.clear(redisTemplate, USER_REDIS_KEY_PREFIX);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
         log.logInfo("Deleted filter caches after verify and activate", logContext);
         
         log.logInfo("User verified and activated successfully", logContext);
         
-        UserModel userModel = modelMapper.map(userEntity, UserModel.class);
-        if (userEntity.getBirth() != null) {
-            userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
-        }
-        return userModel;
+        return toUserModel(userEntity);
     }
 
     // resend verification token
@@ -655,18 +615,13 @@ public class UserServiceImp implements UserService {
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public String resendVerificationToken(Integer userId) {
-        LogContext logContext = getLogContext("resendVerificationToken", Collections.singletonList(userId));
+        LogContext logContext = getLogContext(
+            "resendVerificationToken",
+            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
+        );
         log.logInfo("Resending verification token to user ...!", logContext);
 
-        UserEntity userEntity = userRepository.findById(userId).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "User not found with id: " + userId,
-                Collections.singletonList(userId),
-                "userModel"
-            );
-            log.logError("User not found", e, logContext);
-            return e;
-        });
+        UserEntity userEntity = userEntityUtils.requireById(userId, "userModel", logContext, log);
         if (userEntity.getUserStatus() != UserStatus.PENDING) {
             ValidationExceptionHandle e = new ValidationExceptionHandle(
                 "User is not in PENDING status. Current status: " + userEntity.getUserStatus(),
@@ -676,7 +631,7 @@ public class UserServiceImp implements UserService {
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
-        String verificationToken = jwtService.generateVeruficationToken(userId);
+        String verificationToken = jwtService.generateVerificationToken(userId);
         log.logInfo("completed, resended verification token to user: " + userId, logContext);
         return verificationToken;
     }
@@ -694,6 +649,9 @@ public class UserServiceImp implements UserService {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
+        }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
         }
         
         List<FilterCondition<UserEntity>> conditions = buildFilterConditions(
@@ -720,15 +678,18 @@ public class UserServiceImp implements UserService {
 
     // loginFallback
     @SuppressWarnings("unused")
-    private UserRegisterModel loginFallback(
-        LoginRequestModel req, Exception e
+    private UserLoginModel loginFallback(
+        LoginRequestModel req, Throwable e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
+        if (isBusinessThrowable(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for login service", 
             "login"
@@ -738,15 +699,16 @@ public class UserServiceImp implements UserService {
 
     // logoutFallback
     @SuppressWarnings("unused")
-    private void logoutFallback(
-        String username, Exception e
-    ) {
+    private void logoutFallback(Exception e) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for logout service", 
             "logout"
@@ -763,8 +725,11 @@ public class UserServiceImp implements UserService {
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for creates service", 
             "creates"
@@ -777,23 +742,18 @@ public class UserServiceImp implements UserService {
     private UserModel updateNormalFallback(
         UpdateUserNormalModel update, Integer userId, Exception e
     ) {
-        // Nếu là business exception (ConflictExceptionHandle, NotFoundExceptionHandle, etc.)
-        // thì re-throw để exception handler xử lý đúng (409, 404, etc.)
-        // Chỉ throw ServiceUnavailableExceptionHandle khi thực sự service unavailable
-        if (e instanceof ConflictExceptionHandle || 
-            e instanceof NotFoundExceptionHandle ||
-            e instanceof ValidationExceptionHandle ||
-            e instanceof ForbiddenExceptionHandle ||
-            e instanceof UnauthorizedExceptionHandle) {
+        if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updateNormal service", 
             "updateNormal"
         );
-        // Không dùng log trong fallback vì private method không được inject dependency
         throw error;
     }
 
@@ -806,8 +766,11 @@ public class UserServiceImp implements UserService {
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesForAdmin service", 
             "updatesForAdmin"
@@ -824,8 +787,11 @@ public class UserServiceImp implements UserService {
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for verifyAndActivate service", 
             "verifyAndActivate"
@@ -842,8 +808,11 @@ public class UserServiceImp implements UserService {
         if (isBusinessException(e)) {
             throw (RuntimeException) e;
         }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
         
-        // Service unavailable hoặc exception khác
+        // Chỉ trả 503 khi circuit breaker thực sự open
         ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
             e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for resendVerificationToken service", 
             "resendVerificationToken"
@@ -862,6 +831,35 @@ public class UserServiceImp implements UserService {
                e instanceof UnauthorizedExceptionHandle;
     }
 
+    private boolean isBusinessThrowable(Throwable e) {
+        return e instanceof ConflictExceptionHandle ||
+               e instanceof NotFoundExceptionHandle ||
+               e instanceof ValidationExceptionHandle ||
+               e instanceof ForbiddenExceptionHandle ||
+               e instanceof UnauthorizedExceptionHandle;
+    }
+
+    private boolean isCircuitBreakerOpen(Throwable e) {
+        Throwable cause = e;
+        while (cause != null) {
+            if (cause instanceof CallNotPermittedException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    // private method
+
+    private UserModel toUserModel(UserEntity userEntity) {
+        UserModel userModel = modelMapper.map(userEntity, UserModel.class);
+        if (userEntity.getBirth() != null) {
+            userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
+        }
+        return userModel;
+    }
+
     private List<FilterCondition<UserEntity>> buildFilterConditions(
         Integer id, String username, String fullname, String email, String phone,
         Gender gender, LocalDate birth, String address, UserRole role, UserStatus userStatus
@@ -870,16 +868,16 @@ public class UserServiceImp implements UserService {
         if (id != null && id > 0) {
             conditions.add(FilterCondition.eq("id", id));
         }
-        if (username != null) {
+        if (StringUtils.hasText(username)) {
             conditions.add(FilterCondition.likeIgnoreCase("username", username));
         }
-        if (fullname != null) {
+        if (StringUtils.hasText(fullname)) {
             conditions.add(FilterCondition.likeIgnoreCase("fullname", fullname));
         }
-        if (email != null) {
+        if (StringUtils.hasText(email)) {
             conditions.add(FilterCondition.likeIgnoreCase("email", email));
         }
-        if (phone != null) {
+        if (StringUtils.hasText(phone)) {
             conditions.add(FilterCondition.likeIgnoreCase("phone", phone));
         }
         if (gender != null && (gender.equals(Gender.MALE) || gender.equals(Gender.FEMALE))) {
@@ -888,7 +886,7 @@ public class UserServiceImp implements UserService {
         if (birth != null && birth.isBefore(LocalDate.now())) {
             conditions.add(FilterCondition.eq("birth", birth));
         }
-        if (address != null) {
+        if (StringUtils.hasText(address)) {
             conditions.add(FilterCondition.likeIgnoreCase("address", address));
         }
         if (role != null && (role.equals(UserRole.ADMIN) ||
@@ -897,7 +895,7 @@ public class UserServiceImp implements UserService {
             role.equals(UserRole.CASHIER))) {
             conditions.add(FilterCondition.eq("role", role));
         }
-        if (userStatus != null && userStatus.equals(UserStatus.ACTIVE)) {
+        if (userStatus != null) {
             conditions.add(FilterCondition.eq("userStatus", userStatus));
         }
         return conditions;

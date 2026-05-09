@@ -24,8 +24,6 @@ public class ReservationEntity extends BaseEntity {
     private String customerPhone;
     @Column(name = "customer_email", nullable = false)
     private String customerEmail;
-    @Column(name = "table_id", nullable = false, insertable = false, updatable = false)
-    private Integer tableId;
     @Column(name = "reservation_ts", nullable = false)
     private LocalDateTime reservationTs;
     @Column(name = "number_of_guests", nullable = false)
@@ -42,6 +40,6 @@ public class ReservationEntity extends BaseEntity {
     private Long version;
 
     @ManyToOne
-    @JoinColumn(name = "table_id")
+    @JoinColumn(name = "table_number", referencedColumnName = "table_number")
     private TableEntity table;
 }

@@ -10,11 +10,8 @@ import com.common.models.menu.MenuItemModel;
 
 public interface MenuItemService {
     Page<MenuItemModel> filters(
-        Integer id,
-        String name,
-        String categoryName,
-        MenuItemStatus menuItemStatus,
-        Pageable pageable
+        Integer id, String name, String categoryName,
+        MenuItemStatus menuItemStatus, Pageable pageable
     );
     List<MenuItemModel> create(List<MenuItemModel> menuItems);
     List<MenuItemModel> update(List<MenuItemModel> updates, List<Integer> menuItemIds);

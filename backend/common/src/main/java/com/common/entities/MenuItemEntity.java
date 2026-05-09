@@ -25,10 +25,8 @@ public class MenuItemEntity extends BaseEntity {
     private String description;
     @Column(name = "price", nullable = false)
     private BigDecimal price;
-    @Column(name = "image")
+    @Column(name = "image", nullable = false)
     private String image;
-    @Column(name = "category_name", nullable = false)
-    private String categoryName;
     @Column(name = "menu_item_status", nullable = false)
     @Enumerated(EnumType.STRING)
     private MenuItemStatus menuItemStatus;
@@ -39,7 +37,7 @@ public class MenuItemEntity extends BaseEntity {
     private Long version;
 
     @ManyToOne
-    @JoinColumn(name = "category_name", referencedColumnName = "name", insertable = false, updatable = false)
+    @JoinColumn(name = "category_name", referencedColumnName = "name", nullable = false)
     private CategoryEntity category;
     @OneToMany(mappedBy = "menuItem", fetch = FetchType.LAZY)
     private List<OrderItemEntity> orderItems;

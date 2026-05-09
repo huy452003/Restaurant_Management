@@ -23,9 +23,15 @@ import com.common.enums.OrderType;
 public class OrderEntity extends BaseEntity {
     @Column(name = "order_number", nullable = false, unique = true, length = 50)
     private String orderNumber;
-    @Column(name = "table_id", nullable = false, insertable = false, updatable = false)
-    private Integer tableId;
-    @Column(name = "waiter_id", nullable = false, insertable = false, updatable = false)
+    @Column(name = "customer_name")
+    private String customerName;
+    @Column(name = "customer_phone")
+    private String customerPhone;
+    @Column(name = "customer_email")
+    private String customerEmail;
+    @Column(name = "table_number", nullable = false, insertable = false, updatable = false)
+    private Integer tableNumber;
+    @Column(name = "waiter_id", nullable = true, insertable = false, updatable = false)
     private Integer waiterId;
     @Column(name = "order_status", nullable = false)
     @Enumerated(EnumType.STRING)
@@ -33,13 +39,11 @@ public class OrderEntity extends BaseEntity {
     @Column(name = "order_type", nullable = false)
     @Enumerated(EnumType.STRING)
     private OrderType orderType;
-    @Column(name = "sub_total", nullable = false)
+    @Column(name = "sub_total")
     private BigDecimal subTotal;
-    @Column(name = "tax", nullable = false)
+    @Column(name = "tax")
     private BigDecimal tax;
-    @Column(name = "discount")
-    private BigDecimal discount;
-    @Column(name = "total_amount", nullable = false)
+    @Column(name = "total_amount")
     private BigDecimal totalAmount;
     @Column(name = "notes")
     private String notes;
@@ -52,7 +56,7 @@ public class OrderEntity extends BaseEntity {
     private Long version;
 
     @ManyToOne
-    @JoinColumn(name = "table_id")
+    @JoinColumn(name = "table_number", referencedColumnName = "table_number")
     private TableEntity table;
     @ManyToOne
     @JoinColumn(name = "waiter_id")

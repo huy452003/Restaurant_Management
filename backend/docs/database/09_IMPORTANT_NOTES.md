@@ -31,9 +31,6 @@
 - `DISCONTINUED`: Ẩn khỏi menu, nhưng vẫn hiển thị trong Order cũ
 - Cần validate trước khi thêm vào Order
 
-## 7. PROMOTION.applicableItems
-- Nếu `null` hoặc empty: Áp dụng cho tất cả MenuItem
-- Nếu có giá trị: Chỉ áp dụng cho các MenuItem được chọn
 
 ## 8. RESERVATION và TABLE
 - Cần validate: `numberOfGuests <= Table.capacity`

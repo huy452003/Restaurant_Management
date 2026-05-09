@@ -1,10 +1,15 @@
 package com.common.configurations;
 
+import java.math.BigDecimal;
+
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateDeserializer;
@@ -54,8 +59,23 @@ public class JacksonConfig {
             }
         });
 
+        // BigDecimal JSON: bỏ .00 thừa; dùng toPlainString() — stripTrailingZeros + writeNumber() có thể
+        // thành scale âm và Jackson in dạng khoa học (5E+5) thay vì 500000.
+        SimpleModule bigDecimalModule = new SimpleModule("MinimalPlainBigDecimalModule");
+        bigDecimalModule.addSerializer(BigDecimal.class, new JsonSerializer<>() {
+            @Override
+            public void serialize(BigDecimal value, JsonGenerator gen, SerializerProvider serializers)
+                throws IOException {
+                if (value == null) {
+                    gen.writeNull();
+                    return;
+                }
+                gen.writeRawValue(value.stripTrailingZeros().toPlainString());
+            }
+        });
+
         return builder
-            .modules(javaTimeModule, stringTrimModule)
+            .modules(javaTimeModule, stringTrimModule, bigDecimalModule)
             .featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .build();
     }

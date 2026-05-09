@@ -15,7 +15,7 @@ import java.util.List;
 @Repository
 public interface ReservationRepository extends JpaRepository<ReservationEntity, Integer>, JpaSpecificationExecutor<ReservationEntity> {
     // Tìm reservations theo table
-    List<ReservationEntity> findByTableId(Integer tableId);
+    List<ReservationEntity> findByTable_TableNumber(Integer tableNumber);
     
     // Tìm reservations theo status
     List<ReservationEntity> findByReservationStatus(ReservationStatus reservationStatus);
@@ -24,7 +24,7 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
     List<ReservationEntity> findByReservationTsBetween(LocalDateTime start, LocalDateTime end);
     
     // Tìm reservations theo table và timestamp range (quan trọng để check conflict)
-    List<ReservationEntity> findByTableIdAndReservationTsBetween(Integer tableId, LocalDateTime start, LocalDateTime end);
+    List<ReservationEntity> findByTable_TableNumberAndReservationTsBetween(Integer tableNumber, LocalDateTime start, LocalDateTime end);
     
     // Tìm reservations theo customer phone
     List<ReservationEntity> findByCustomerPhone(String phone);
@@ -34,11 +34,43 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
     
     // Tìm reservations trong khoảng thời gian
     @Query("SELECT r FROM ReservationEntity r WHERE FUNCTION('DATE', r.reservationTs) = :date " +
-           "AND r.tableId = :tableId " +
+           "AND r.table.tableNumber = :tableNumber " +
            "AND r.reservationStatus != :cancelledStatus")
     List<ReservationEntity> findActiveReservationsByTableAndDate(
         @Param("date") LocalDate date,
-        @Param("tableId") Integer tableId,
+        @Param("tableNumber") Integer tableNumber,
         @Param("cancelledStatus") ReservationStatus cancelledStatus
+    );
+
+    @Query("""
+        SELECT COUNT(r) > 0
+        FROM ReservationEntity r
+        WHERE r.table.tableNumber = :tableNumber
+          AND r.reservationStatus IN :activeStatuses
+          AND r.reservationTs BETWEEN :startTs AND :endTs
+          AND (:excludeId IS NULL OR r.id <> :excludeId)
+    """)
+    boolean existsActiveTimeslotConflict(
+        @Param("tableNumber") Integer tableNumber,
+        @Param("startTs") LocalDateTime startTs,
+        @Param("endTs") LocalDateTime endTs,
+        @Param("activeStatuses") List<ReservationStatus> activeStatuses,
+        @Param("excludeId") Integer excludeId
+    );
+
+    @Query("""
+        SELECT COUNT(r) > 0
+        FROM ReservationEntity r
+        WHERE r.table.tableNumber = :tableNumber
+          AND r.reservationStatus IN :activeStatuses
+          AND r.reservationTs BETWEEN :windowStart AND :windowEnd
+          AND (:excludeId IS NULL OR r.id <> :excludeId)
+    """)
+    boolean existsActiveReservationInWindow(
+        @Param("tableNumber") Integer tableNumber,
+        @Param("windowStart") LocalDateTime windowStart,
+        @Param("windowEnd") LocalDateTime windowEnd,
+        @Param("activeStatuses") List<ReservationStatus> activeStatuses,
+        @Param("excludeId") Integer excludeId
     );
 }
