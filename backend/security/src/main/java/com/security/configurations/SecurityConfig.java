@@ -27,7 +27,9 @@ public class SecurityConfig {
                     "/users/register",
                     "/users/login",
                     "/users/logout",
-                    "/users/public/**"
+                    "/users/public/**",
+                    "/payments/vnpay/return",
+                    "/payments/vnpay/ipn"
                 ).permitAll()
                 .anyRequest().authenticated()
             )

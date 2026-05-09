@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Secrets & local overrides (never commit) ###
+**/application-local.properties
+**/.env
+**/.env.local
+**/.env.*.local
+**/secrets.properties
+**/credentials.properties

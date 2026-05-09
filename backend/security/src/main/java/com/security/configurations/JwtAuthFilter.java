@@ -145,7 +145,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         return uri.endsWith("/register")
             || uri.endsWith("/login")
             || uri.endsWith("/logout")
-            || uri.contains("/public/");
+            || uri.contains("/public/")
+            || uri.contains("/payments/vnpay/return")
+            || uri.contains("/payments/vnpay/ipn");
     }
 
 }

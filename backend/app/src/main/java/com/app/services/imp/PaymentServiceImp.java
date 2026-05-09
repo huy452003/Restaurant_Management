@@ -221,6 +221,29 @@ public class PaymentServiceImp implements PaymentService {
 
     @Override
     @Transactional
+    public PaymentModel markFailedFromGateway(Integer paymentId) {
+        // Đặt trạng thái FAILED cho giao dịch chờ (PENDING) sau khi VNPAY từ chối / lỗi — giữ idempotency ở lớp gọi.
+        LogContext logContext = getLogContext("markFailedFromGateway", Collections.singletonList(paymentId));
+        log.logInfo("Marking payment FAILED from gateway ...!", logContext);
+
+        PaymentEntity payment = getPaymentById(paymentId, logContext);
+        if (!Objects.equals(payment.getPaymentStatus(), PaymentStatus.PENDING)) {
+            log.logWarn("skip mark FAILED — payment " + paymentId + " not PENDING", logContext);
+            return toPaymentModel(payment);
+        }
+
+        payment.setPaymentStatus(PaymentStatus.FAILED);
+        payment.setPaidAt(LocalDateTime.now());
+        paymentRepository.save(payment);
+        paymentRepository.flush();
+
+        clearPaymentAndOrderCaches(logContext);
+        log.logInfo("completed, payment " + paymentId + " marked FAILED", logContext);
+        return toPaymentModel(payment);
+    }
+
+    @Override
+    @Transactional
     public PaymentModel cancel(Integer paymentId) {
         LogContext logContext = getLogContext("cancel", Collections.singletonList(paymentId));
         log.logInfo("Cancelling payment ...!", logContext);

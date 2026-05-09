@@ -20,4 +20,9 @@ public interface PaymentService {
     PaymentModel create(PaymentCreateRequestModel payment);
     PaymentModel complete(Integer paymentId);
     PaymentModel cancel(Integer paymentId);
+
+    /**
+     * Đánh dấu PENDING thành FAILED khi cổng VNPAY báo không thành công (IPN/return), không dùng cho hủy thủ công.
+     */
+    PaymentModel markFailedFromGateway(Integer paymentId);
 }

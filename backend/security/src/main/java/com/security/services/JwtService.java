@@ -1,7 +1,8 @@
 package com.security.services;
 
+import java.util.HexFormat;
+
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.actuate.autoconfigure.metrics.MetricsProperties.Data;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
@@ -34,9 +35,21 @@ public class JwtService {
             .compact();
     }
 
-    // lấy secret key từ config
-    private SecretKey getSecretKey(){
-        byte[] keyBytes = Decoders.BASE64.decode(jwtConfig.secret());
+    // Đọc jwt.secret (từ JWT_SECRET / application-local): hỗ trợ hex 32 byte (64 ký tự hex) hoặc chuỗi Base64.
+    private SecretKey getSecretKey() {
+        String raw = jwtConfig.secret();
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalStateException(
+                "jwt.secret trống: thêm JWT_SECRET (env) hoặc jwt.secret trong application-local.properties."
+            );
+        }
+        String s = raw.trim();
+        byte[] keyBytes;
+        if (s.length() >= 2 && (s.length() % 2 == 0) && s.matches("[0-9A-Fa-f]+")) {
+            keyBytes = HexFormat.of().parseHex(s);
+        } else {
+            keyBytes = Decoders.BASE64.decode(s);
+        }
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
