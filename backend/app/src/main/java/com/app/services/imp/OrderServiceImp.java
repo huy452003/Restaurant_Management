@@ -370,7 +370,9 @@ public class OrderServiceImp implements OrderService {
                 }
 
                 OrderStatus requestedStatus = update.getOrderStatus();
+                OrderStatus statusBeforeMap = current.getOrderStatus();
                 modelMapper.map(update, current);
+                current.setOrderStatus(statusBeforeMap);
                 current.setCustomerName(customerUser.getFullname());
                 current.setCustomerPhone(customerUser.getPhone());
                 current.setCustomerEmail(customerUser.getEmail());

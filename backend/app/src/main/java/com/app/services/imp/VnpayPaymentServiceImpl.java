@@ -5,11 +5,13 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
 
-import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,14 +22,21 @@ import org.springframework.util.StringUtils;
 import com.app.config.VnpayProperties;
 import com.app.services.PaymentService;
 import com.app.services.VnpayPaymentService;
+import com.app.utils.UserEntityUtils;
 import com.app.utils.VnpaySignatureUtils;
+import com.common.entities.OrderEntity;
 import com.common.entities.PaymentEntity;
+import com.common.entities.UserEntity;
 import com.common.enums.PaymentMethod;
 import com.common.enums.PaymentStatus;
 import com.common.models.payment.PaymentCreateRequestModel;
 import com.common.models.payment.PaymentModel;
+import com.common.models.payment.VnpayCheckoutPaymentModel;
 import com.common.models.payment.VnpayCheckoutResponse;
+import com.common.models.payment.VnpayInitRequestModel;
+import com.common.repositories.OrderRepository;
 import com.common.repositories.PaymentRepository;
+import com.common.repositories.UserRepository;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
 import com.logging.models.LogContext;
@@ -47,6 +56,10 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     private static final String VNP_ORDER_TYPE_OTHER = "other";
     private static final String ZONE_ID_VN = "Asia/Ho_Chi_Minh";
     private static final DateTimeFormatter VNP_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    /** Cùng logic PaymentServiceImp — PENDING/COMPLETED đang chiếm hạn mức so với total đơn. */
+    private static final List<PaymentStatus> ALLOCATING_STATUSES = Arrays.asList(
+        PaymentStatus.PENDING, PaymentStatus.COMPLETED);
+    private static final int AMOUNT_SCALE = 2;
 
     @Autowired
     private VnpayProperties vnpayProperties;
@@ -55,9 +68,13 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
-    private LoggingService log;
+    private OrderRepository orderRepository;
     @Autowired
-    private ModelMapper modelMapper;
+    private UserRepository userRepository;
+    @Autowired
+    private UserEntityUtils userEntityUtils;
+    @Autowired
+    private LoggingService log;
 
     private LogContext logContext(String method) {
         return LogContext.builder()
@@ -71,20 +88,40 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
 
     @Override
     @Transactional
-    public VnpayCheckoutResponse initiateVnpay(PaymentCreateRequestModel request, HttpServletRequest httpRequest) {
-        // Luồng: validate VNPAY → create payment PENDING → transactionId = id → ghép tham số vnp_* → ký SHA512 → trả URL.
+    public VnpayCheckoutResponse initiateVnpay(VnpayInitRequestModel request, HttpServletRequest httpRequest) {
+        // Luồng: tra đơn theo orderNumber → amount còn lại → cashier = user đăng nhập → create VNPAY → ký URL.
         LogContext ctx = logContext("initiateVnpay");
         requireVnpayConfigured(ctx);
+        log.logInfo(
+            "VNPAY init: tmnCodeLen=" + vnpayProperties.getTmnCode().length()
+                + ", hashSecretLen=" + vnpayProperties.getHashSecret().length(),
+            ctx
+        );
 
-        if (request.getPaymentMethod() != PaymentMethod.VNPAY) {
-            throw new ValidationExceptionHandle(
-                "Chỉ dùng paymentMethod VNPAY cho endpoint /payments/vnpay/init",
-                Collections.emptyList(),
-                "PaymentModel"
+        UserEntity actor = userEntityUtils.requireAuthenticatedUser("PaymentModel", ctx, log);
+        Integer cashierId = actor.getId();
+
+        String orderNumber = request.getOrderNumber() != null ? request.getOrderNumber().trim() : "";
+        OrderEntity order = orderRepository.findByOrderNumber(orderNumber).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Order not found with orderNumber: " + orderNumber,
+                Collections.singletonList(orderNumber),
+                "OrderModel"
             );
-        }
+            log.logError(e.getMessage(), e, ctx);
+            return e;
+        });
 
-        PaymentModel created = paymentService.create(request);
+        BigDecimal vnpayAmount = resolveVnpayAmountFromOrderRemaining(order.getId(), ctx);
+
+        PaymentCreateRequestModel createPayload = new PaymentCreateRequestModel(
+            order.getId(),
+            cashierId,
+            PaymentMethod.VNPAY,
+            vnpayAmount
+        );
+
+        PaymentModel created = paymentService.create(createPayload);
 
         PaymentEntity saved = paymentRepository.findById(created.getId()).orElseThrow(() -> new NotFoundExceptionHandle(
             "Payment not found after create: " + created.getId(),
@@ -125,23 +162,92 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
                 "PaymentModel"
             ));
         log.logInfo("VNPAY init ok, paymentId=" + saved.getId(), ctx);
-        return new VnpayCheckoutResponse(paymentUrl, toPaymentModel(refreshedEntity));
+        return new VnpayCheckoutResponse(paymentUrl, toVnpayCheckoutPaymentModel(refreshedEntity));
     }
 
-    private PaymentModel toPaymentModel(PaymentEntity pe) {
-        // Map entity → API model; set orderId/cashierId từ quan hệ hoặc cột snapshot JPA.
-        PaymentModel m = modelMapper.map(pe, PaymentModel.class);
-        if (pe.getOrder() != null) {
-            m.setOrderId(pe.getOrder().getId());
-        } else if (pe.getOrderId() != null) {
-            m.setOrderId(pe.getOrderId());
+    /**
+     * Số tiền gửi sang VNPAY = total đơn − (PENDING + COMPLETED) — đồng bộ với quota ví dụ tiền mặt.
+     */
+    private BigDecimal resolveVnpayAmountFromOrderRemaining(Integer orderId, LogContext ctx) {
+        OrderEntity order = orderRepository.findById(orderId).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Order not found with id: " + orderId,
+                Collections.singletonList(orderId),
+                "OrderModel"
+            );
+            log.logError(e.getMessage(), e, ctx);
+            return e;
+        });
+
+        if (order.getTotalAmount() == null) {
+            throw new ValidationExceptionHandle(
+                "Đơn chưa có total amount; không thể tính tiền VNPAY.",
+                Collections.singletonList(orderId),
+                "PaymentModel"
+            );
         }
-        if (pe.getCashier() != null) {
-            m.setCashierId(pe.getCashier().getId());
-        } else if (pe.getCashierId() != null) {
-            m.setCashierId(pe.getCashierId());
+
+        BigDecimal total = order.getTotalAmount().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal allocated = Optional.ofNullable(
+            paymentRepository.sumAmountByOrderIdAndPaymentStatuses(orderId, ALLOCATING_STATUSES)
+        ).orElse(BigDecimal.ZERO).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+
+        BigDecimal remaining = total.subtract(allocated);
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ValidationExceptionHandle(
+                "Không còn số tiền để thanh toán VNPAY (đã khớp tổng đơn hoặc đang có khoản PENDING).",
+                Collections.singletonList(orderId),
+                "PaymentModel"
+            );
         }
+
+        if (remaining.compareTo(new BigDecimal("0.01")) < 0) {
+            throw new ValidationExceptionHandle(
+                "Số tiền còn lại nhỏ hơn mức tối thiểu thanh toán (0,01).",
+                Collections.singletonList(orderId),
+                "PaymentModel"
+            );
+        }
+
+        log.logInfo("VNPAY amount derived from order remaining: " + remaining + " for orderId=" + orderId, ctx);
+        return remaining;
+    }
+
+    private VnpayCheckoutPaymentModel toVnpayCheckoutPaymentModel(PaymentEntity pe) {
+        VnpayCheckoutPaymentModel m = new VnpayCheckoutPaymentModel();
+        m.setId(pe.getId());
+        m.setCreatedAt(pe.getCreatedAt());
+        m.setUpdatedAt(pe.getUpdatedAt());
+        m.setPaymentMethod(pe.getPaymentMethod());
+        m.setAmount(pe.getAmount());
+        m.setPaymentStatus(pe.getPaymentStatus());
+        m.setTransactionId(pe.getTransactionId());
+        m.setPaidAt(pe.getPaidAt());
+        m.setOrderNumber(resolveOrderNumberForPayment(pe));
+        m.setFullname(resolveCashierFullnameForPayment(pe));
         return m;
+    }
+
+    private String resolveOrderNumberForPayment(PaymentEntity pe) {
+        if (pe.getOrder() != null && pe.getOrder().getOrderNumber() != null) {
+            return pe.getOrder().getOrderNumber();
+        }
+        Integer oid = pe.getOrderId();
+        if (oid == null) {
+            return null;
+        }
+        return orderRepository.findById(oid).map(OrderEntity::getOrderNumber).orElse(null);
+    }
+
+    private String resolveCashierFullnameForPayment(PaymentEntity pe) {
+        if (pe.getCashier() != null && pe.getCashier().getFullname() != null) {
+            return pe.getCashier().getFullname();
+        }
+        Integer cid = pe.getCashierId();
+        if (cid == null) {
+            return null;
+        }
+        return userRepository.findById(cid).map(UserEntity::getFullname).orElse(null);
     }
 
     private static String buildOrderInfoLabel(PaymentEntity p) {

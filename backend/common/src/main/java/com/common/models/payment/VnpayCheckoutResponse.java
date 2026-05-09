@@ -13,5 +13,5 @@ import lombok.NoArgsConstructor;
 public class VnpayCheckoutResponse {
     /** URL đầy đủ (có query + vnp_SecureHash) để browser redirect tới cổng VNPAY. */
     private String paymentUrl;
-    private PaymentModel payment;
+    private VnpayCheckoutPaymentModel payment;
 }

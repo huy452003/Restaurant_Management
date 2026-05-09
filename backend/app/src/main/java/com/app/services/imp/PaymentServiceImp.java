@@ -341,12 +341,14 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
+    /** Thu ngân có thể là CASHIER hoặc MANAGER/ADMIN khi tự thao tác (vd. VNPAY lấy user từ SecurityContext). */
     private void enforceCashierUserRoleIsCashier(UserEntity cashier, LogContext logContext) {
-        if (cashier.getRole() != UserRole.CASHIER) {
+        UserRole r = cashier.getRole();
+        if (r != UserRole.CASHIER && r != UserRole.MANAGER && r != UserRole.ADMIN) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "The payment cashier record must reference a user with role CASHIER",
+                "Payment must be registered by CASHIER, MANAGER, or ADMIN",
                 "PaymentModel",
-                "cashier.role must be CASHIER"
+                "cashier role must be CASHIER, MANAGER or ADMIN"
             );
             log.logError(e.getMessage(), e, logContext);
             throw e;

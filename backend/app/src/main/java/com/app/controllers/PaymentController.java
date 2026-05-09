@@ -110,7 +110,6 @@ public class PaymentController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PatchMapping("/complete/{paymentId}")
     @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
     public ResponseEntity<Response<PaymentModel>> complete(

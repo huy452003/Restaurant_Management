@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.app.services.VnpayPaymentService;
 import com.common.models.Response;
-import com.common.models.payment.PaymentCreateRequestModel;
+import com.common.models.payment.VnpayInitRequestModel;
 import com.common.models.payment.VnpayCheckoutResponse;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
@@ -53,12 +53,12 @@ public class VnpayPaymentController {
     public ResponseEntity<Response<VnpayCheckoutResponse>> init(
         Locale locale,
         HttpServletRequest httpRequest,
-        @RequestBody @Valid PaymentCreateRequestModel payment
+        @RequestBody @Valid VnpayInitRequestModel body
     ) {
-        // Delegating: gọi service khởi tạo, trả paymentUrl + payment snapshot cho FE mở cổng VNPAY.
+        // Delegating: amount do server tính từ còn lại đơn — trả paymentUrl + payment cho FE redirect VNPAY.
         LogContext ctx = logContext("init");
         log.logInfo("VNPAY init endpoint called", ctx);
-        VnpayCheckoutResponse data = vnpayPaymentService.initiateVnpay(payment, httpRequest);
+        VnpayCheckoutResponse data = vnpayPaymentService.initiateVnpay(body, httpRequest);
         Response<VnpayCheckoutResponse> response = new Response<>(
             201,
             messageSource.getMessage("response.message.vnpayInitSuccess", null, locale),

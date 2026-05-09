@@ -52,17 +52,16 @@ Trạng thái món ăn
 - `DISCONTINUED` - Ngừng phục vụ
 
 ## 8. PaymentMethod
-Phương thức thanh toán
+Phương thức thanh toán (chỉ tiền mặt hoặc VNPAY)
 - `CASH` - Tiền mặt
-- `CARD` - Thẻ
-- `BANK_TRANSFER` - Chuyển khoản
-- `E_WALLET` - Ví điện tử
+- `VNPAY` - VNPAY
 
 ## 9. PaymentStatus
 Trạng thái thanh toán
 - `PENDING` - Chờ thanh toán
 - `COMPLETED` - Đã thanh toán
-- `REFUNDED` - Đã hoàn tiền
+- `FAILED` - Thất bại
+- `CANCELLED` - Đã hủy
 
 ## 10. ShiftStatus
 Trạng thái ca làm việc

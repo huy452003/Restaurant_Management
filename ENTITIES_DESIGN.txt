@@ -49,14 +49,13 @@ CÁC ENUMS CẦN TẠO:
 
 8. PaymentMethod
    - CASH (Tiền mặt)
-   - CARD (Thẻ)
-   - BANK_TRANSFER (Chuyển khoản)
-   - E_WALLET (Ví điện tử)
+   - VNPAY (VNPAY)
 
 9. PaymentStatus
    - PENDING (Chờ thanh toán)
    - COMPLETED (Đã thanh toán)
-   - REFUNDED (Đã hoàn tiền)
+   - FAILED (Thất bại)
+   - CANCELLED (Đã hủy)
 
 10. ShiftStatus
     - SCHEDULED (Đã lên lịch)

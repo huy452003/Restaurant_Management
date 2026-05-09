@@ -24,7 +24,7 @@ public class VnpayProperties {
     }
 
     public void setTmnCode(String tmnCode) {
-        this.tmnCode = tmnCode;
+        this.tmnCode = tmnCode != null ? tmnCode.trim() : "";
     }
 
     public String getHashSecret() {
@@ -32,7 +32,7 @@ public class VnpayProperties {
     }
 
     public void setHashSecret(String hashSecret) {
-        this.hashSecret = hashSecret;
+        this.hashSecret = hashSecret != null ? hashSecret.trim() : "";
     }
 
     public String getPaymentUrl() {

@@ -43,9 +43,11 @@ public final class VnpaySignatureUtils {
     /**
      * Tạo chuỗi dữ liệu ký: sort key alphabetically, ghép {@code key=value&} (bỏ {@code vnp_SecureHash},
      * {@code vnp_SecureHashType}), chỉ field tên bắt đầu {@code vnp_}, bỏ giá trị rỗng.
+     * <p>
+     * Khớp sample Java trên tài liệu VNPAY (pay.html): tên tham số giữ nguyên, <strong>giá trị</strong> phải
+     * {@code URLEncoder.encode} (application/x-www-form-urlencoded) trước khi HMAC — không dùng chuỗi thô.
      */
     public static String buildSignData(Map<String, String> params) {
-        // Chuỗi ký: lọc vnp_* (trừ hash), sort tên field, nối key=value&...
         List<String> fieldNames = new ArrayList<>();
         for (String key : params.keySet()) {
             if (key != null
@@ -66,7 +68,7 @@ public final class VnpaySignatureUtils {
             if (i > 0) {
                 hashData.append('&');
             }
-            hashData.append(k).append('=').append(v);
+            hashData.append(k).append('=').append(URLEncoder.encode(v, StandardCharsets.UTF_8));
         }
         return hashData.toString();
     }
