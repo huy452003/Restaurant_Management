@@ -15,6 +15,8 @@ import java.util.List;
 
 @Repository
 public interface PaymentRepository extends JpaRepository<PaymentEntity, Integer>, JpaSpecificationExecutor<PaymentEntity> {
+
+    List<PaymentEntity> findByOrder_IdAndPaymentStatus(Integer orderId, PaymentStatus paymentStatus);
     @Query("SELECT COALESCE(SUM(p.amount), 0) FROM PaymentEntity p WHERE p.orderId = :orderId AND p.paymentStatus IN (:statuses)")
     BigDecimal sumAmountByOrderIdAndPaymentStatuses(@Param("orderId") Integer orderId, @Param("statuses") Collection<PaymentStatus> statuses);
 

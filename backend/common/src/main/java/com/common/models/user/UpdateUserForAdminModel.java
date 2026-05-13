@@ -50,4 +50,8 @@ public class UpdateUserForAdminModel {
     
     @NotNull(message = "validate.user.userStatus.required")
     private UserStatus userStatus;
+
+    /** Đổi mật khẩu: gửi chuỗi ≥ 6 ký tự; bỏ qua hoặc null = giữ mật khẩu cũ. */
+    @Size(min = 6, max = 100, message = "validate.user.password.size")
+    private String password;
 }

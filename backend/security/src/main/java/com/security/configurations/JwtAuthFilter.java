@@ -144,7 +144,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private boolean isPublicEndpoint(String uri) {
         return uri.endsWith("/register")
             || uri.endsWith("/login")
-            || uri.endsWith("/logout")
+            // POST /users/logout cần JWT để blacklist + @PreAuthorize — không skip ở đây
             || uri.contains("/public/")
             || uri.contains("/payments/vnpay/return")
             || uri.contains("/payments/vnpay/ipn");

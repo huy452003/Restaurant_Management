@@ -26,7 +26,6 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/users/register",
                     "/users/login",
-                    "/users/logout",
                     "/users/public/**",
                     "/payments/vnpay/return",
                     "/payments/vnpay/ipn"

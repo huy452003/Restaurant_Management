@@ -81,6 +81,17 @@ public class ShiftServiceImp implements ShiftService {
             id, shiftDate, startTime, endTime, shiftStatus
         );
 
+        UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
+            "ShiftModel", logContext, log
+        );
+        if (
+            currentUser.getRole() == UserRole.WAITER || 
+            currentUser.getRole() == UserRole.CHEF || 
+            currentUser.getRole() == UserRole.CASHIER
+        ) {
+            conditions.add(FilterCondition.eq("employee.id", currentUser.getId()));
+        }
+
         String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
             SHIFT_REDIS_KEY_PREFIX, conditions, pageable
         );

@@ -21,9 +21,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderAdminRequestModel {
-    @NotBlank(message = "validate.order.orderNumber.required")
-    @Size(min = 1, max = 50, message = "validate.order.orderNumber.size")
-    private String orderNumber;
     @NotBlank(message = "validate.reservation.customerName.required")
     @Size(min = 1, max = 50, message = "validate.reservation.customerName.size")
     private String customerName;

@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import com.app.services.OrderService;
+import com.app.services.PaymentService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.entities.TableEntity;
@@ -70,6 +71,8 @@ public class OrderServiceImp implements OrderService {
     private TableRepository tableRepository;
     @Autowired
     private OrderItemRepository orderItemRepository;
+    @Autowired
+    private PaymentService paymentService;
 
     private LogContext getLogContext(String methodName, List<Integer> orderIds) {
         return LogContext.builder()
@@ -279,30 +282,6 @@ public class OrderServiceImp implements OrderService {
         }).collect(Collectors.toList());
         log.logInfo("found " + foundOrders.size() + " orders", logContext);
 
-        List<Object> conflicts = new ArrayList<>();
-        for(int i = 0; i < updates.size(); i++) {
-            OrderAdminRequestModel order = updates.get(i);
-            OrderEntity currentOrder = foundOrders.get(i);
-            if(!Objects.equals(order.getOrderNumber(), currentOrder.getOrderNumber())) {
-                if(orderRepository.existsByOrderNumber(order.getOrderNumber())) {
-                    Map<String, Object> conflict = new HashMap<>();
-                    conflict.put("field", "orderNumber");
-                    conflict.put("value", order.getOrderNumber());
-                    conflict.put("message", "Order number already exists");
-                    conflicts.add(conflict);
-                }
-            }
-        }
-        if(!conflicts.isEmpty()) {
-            ConflictExceptionHandle e = new ConflictExceptionHandle(
-                "Duplicate unique fields detected",
-                conflicts,
-                "OrderModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-
         List<String> customerEmails = updates.stream()
             .map(OrderAdminRequestModel::getCustomerEmail)
             .distinct()
@@ -348,8 +327,7 @@ public class OrderServiceImp implements OrderService {
             OrderAdminRequestModel update = orderIterator.next();
             OrderEntity current = currentOrderIterator.next();
 
-            Boolean hasChanges = !Objects.equals(update.getOrderNumber(), current.getOrderNumber()) ||
-                                 !Objects.equals(update.getCustomerName(), current.getCustomerName()) ||
+            Boolean hasChanges = !Objects.equals(update.getCustomerName(), current.getCustomerName()) ||
                                  !Objects.equals(update.getCustomerPhone(), current.getCustomerPhone()) ||
                                  !Objects.equals(update.getCustomerEmail(), current.getCustomerEmail()) ||
                                  !Objects.equals(update.getTableNumber(), current.getTable().getTableNumber()) ||
@@ -393,6 +371,9 @@ public class OrderServiceImp implements OrderService {
                     current.setWaiter(waiterUser);
                 }
                 OrderStatusTransitionUtils.applyOrderStatusTransition(current, requestedStatus);
+                if (requestedStatus == OrderStatus.CANCELLED && statusBeforeMap != OrderStatus.CANCELLED) {
+                    paymentService.cancelPendingPaymentsForOrder(current.getId());
+                }
                 ordersToUpdate.add(current);
             }
         }
@@ -476,6 +457,7 @@ public class OrderServiceImp implements OrderService {
 
         OrderStatusTransitionUtils.applyOrderStatusTransition(foundOrder, OrderStatus.CANCELLED);
         orderRepository.save(foundOrder);
+        paymentService.cancelPendingPaymentsForOrder(foundOrder.getId());
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
         log.logInfo("completed, cancelled order with id: " + orderId, logContext);
 

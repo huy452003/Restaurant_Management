@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.app.services.OrderItemService;
+import com.app.services.PaymentService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.repositories.MenuItemRepository;
@@ -70,6 +71,8 @@ public class OrderItemServiceImp implements OrderItemService {
     private LoggingService log;
     @Autowired
     private ModelMapper modelMapper;
+    @Autowired
+    private PaymentService paymentService;
 
     private LogContext getLogContext(String methodName, List<Integer> orderItemIds) {
         return LogContext.builder()
@@ -411,7 +414,11 @@ public class OrderItemServiceImp implements OrderItemService {
                 continue;
             }
             OrderStatus targetStatus = determineOrderStatus(itemStatuses);
+            OrderStatus previousOrderStatus = order.getOrderStatus();
             OrderStatusTransitionUtils.applyOrderStatusTransition(order, targetStatus);
+            if (targetStatus == OrderStatus.CANCELLED && previousOrderStatus != OrderStatus.CANCELLED) {
+                paymentService.cancelPendingPaymentsForOrder(order.getId());
+            }
         }
         orderRepository.saveAll(orders);
     }

@@ -537,6 +537,11 @@ public class UserServiceImp implements UserService {
             UpdateUserForAdminModel update = updateIterator.next();
             UserEntity currentUser = userIterator.next();
 
+            String newPasswordPlain = StringUtils.hasText(update.getPassword())
+                ? update.getPassword().trim()
+                : null;
+            update.setPassword(null);
+
             boolean hasChanges = !Objects.equals(update.getUsername(), currentUser.getUsername()) ||
                                  !Objects.equals(update.getFullname(), currentUser.getFullname()) ||
                                  !Objects.equals(update.getEmail(), currentUser.getEmail()) ||
@@ -545,10 +550,14 @@ public class UserServiceImp implements UserService {
                                  !Objects.equals(update.getBirth(), currentUser.getBirth()) ||
                                  !Objects.equals(update.getAddress(), currentUser.getAddress()) ||
                                  !Objects.equals(update.getRole(), currentUser.getRole()) ||
-                                 !Objects.equals(update.getUserStatus(), currentUser.getUserStatus());
+                                 !Objects.equals(update.getUserStatus(), currentUser.getUserStatus()) ||
+                                 newPasswordPlain != null;
 
             if(hasChanges){
                 modelMapper.map(update, currentUser);
+                if (newPasswordPlain != null) {
+                    currentUser.setPassword(passwordEncoder.encode(newPasswordPlain));
+                }
                 usersToUpdate.add(currentUser);
             }
         }
