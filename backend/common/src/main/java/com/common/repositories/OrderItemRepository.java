@@ -14,12 +14,7 @@ public interface OrderItemRepository extends JpaRepository<OrderItemEntity, Inte
     boolean existsByOrder_Id(Integer orderId);
     long countByOrder_Id(Integer orderId);
 
-    // Tìm tất cả items của một order
-    List<OrderItemEntity> findByOrder_Id(Integer orderId);
     List<OrderItemEntity> findByOrder_IdIn(List<Integer> orderIds);
-    
-    // Tìm items theo menuItem
-    List<OrderItemEntity> findByMenuItem_Id(Integer menuItemId);
 
     @Query("""
         SELECT oi.order.id, COUNT(oi.id)

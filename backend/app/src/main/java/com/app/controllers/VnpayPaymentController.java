@@ -38,15 +38,13 @@ public class VnpayPaymentController {
     @Autowired
     private LoggingService log;
 
-    private LogContext logContext(String methodName) {
+    private LogContext getLogContext(String methodName) {
         return LogContext.builder()
             .module("app")
             .className(this.getClass().getSimpleName())
             .methodName(methodName)
             .build();
     }
-
-    // --- POST /payments/vnpay/init — Có JWT; tạo Payment VNPAY + trả URL sang sandbox để FE mở redirect. ---
 
     @PostMapping("/init")
     @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
@@ -55,9 +53,8 @@ public class VnpayPaymentController {
         HttpServletRequest httpRequest,
         @RequestBody @Valid VnpayInitRequestModel body
     ) {
-        // Delegating: amount do server tính từ còn lại đơn — trả paymentUrl + payment cho FE redirect VNPAY.
-        LogContext ctx = logContext("init");
-        log.logInfo("VNPAY init endpoint called", ctx);
+        LogContext logContext = getLogContext("init");
+        log.logInfo("VNPAY init endpoint called", logContext);
         VnpayCheckoutResponse data = vnpayPaymentService.initiateVnpay(body, httpRequest);
         Response<VnpayCheckoutResponse> response = new Response<>(
             201,
@@ -69,23 +66,17 @@ public class VnpayPaymentController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-    // --- GET /payments/vnpay/return — Public; VNPAY redirect browser về sau khi khách thanh toán (ReturnUrl). ---
-
     @GetMapping("/return")
     public void vnpayReturn(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        // Không trả JSON: có thể redirect trình duyệt hoặc ghi HTML (xử lý thật trong service.return).
-        LogContext ctx = logContext("vnpayReturn");
-        log.logInfo("VNPAY return handler", ctx);
+        LogContext logContext = getLogContext("vnpayReturn");
+        log.logInfo("VNPAY return handler", logContext);
         vnpayPaymentService.handleReturn(request, response);
     }
 
-    // --- GET/POST /payments/vnpay/ipn — Public; callback server-to-server (IPN), phải đăng ký URL trên VNPAY và truy cập được từ internet. ---
-
     @RequestMapping(value = "/ipn", method = { RequestMethod.GET, RequestMethod.POST })
     public ResponseEntity<String> vnpayIpn(HttpServletRequest request) {
-        // Trả body JSON RspCode/Message; VNPAY gọi trực tiếp backend (cần URL công khai HTTPS khi test thật).
-        LogContext ctx = logContext("vnpayIpn");
-        log.logInfo("VNPAY IPN handler", ctx);
+        LogContext logContext = getLogContext("vnpayIpn");
+        log.logInfo("VNPAY IPN handler", logContext);
         return vnpayPaymentService.handleIpn(request);
     }
 }

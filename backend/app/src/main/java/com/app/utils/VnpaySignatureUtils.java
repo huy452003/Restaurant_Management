@@ -15,9 +15,6 @@ import org.springframework.util.StringUtils;
 
 import jakarta.servlet.http.HttpServletRequest;
 
-/**
- * Tiện ích HMAC-SHA512 và chuỗi ký theo tài liệu VNPAY (sort key bắt đầu bằng {@code vnp_}, bỏ hash).
- */
 public final class VnpaySignatureUtils {
 
     private static final String HMAC_SHA512 = "HmacSHA512";

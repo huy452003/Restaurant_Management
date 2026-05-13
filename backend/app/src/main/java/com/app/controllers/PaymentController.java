@@ -62,8 +62,8 @@ public class PaymentController {
     public ResponseEntity<Response<PaginatedResponse<PaymentModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
-        @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer orderId,
-        @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer cashierId,
+        @RequestParam(required = false) String orderNumber,
+        @RequestParam(required = false) String cashierFullname,
         @RequestParam(required = false) PaymentMethod paymentMethod,
         @RequestParam(required = false) BigDecimal amount,
         @RequestParam(required = false) PaymentStatus paymentStatus,
@@ -74,7 +74,7 @@ public class PaymentController {
         log.logInfo("is running, preparing to call service ...!", logContext);
 
         Page<PaymentModel> paymentPage = paymentService.filters(
-            id, orderId, cashierId, paymentMethod, 
+            id, orderNumber, cashierFullname, paymentMethod, 
             amount, paymentStatus, transactionId, pageable
         );
         PaginatedResponse<PaymentModel> paginatedResponse = PaginatedResponse.of(paymentPage);

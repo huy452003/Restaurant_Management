@@ -10,14 +10,16 @@ import com.common.models.BaseModel;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 @Data
+@EqualsAndHashCode(callSuper = false)
 @AllArgsConstructor
 @NoArgsConstructor
 public class PaymentModel extends BaseModel{
-    private Integer orderId;
-    private Integer cashierId;
+    private String orderNumber;
+    private String cashierFullname;
     private PaymentMethod paymentMethod;
     private BigDecimal amount;
     private PaymentStatus paymentStatus;

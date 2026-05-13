@@ -8,23 +8,14 @@ import jakarta.persistence.LockModeType;
 
 import com.common.entities.TableEntity;
 import com.common.enums.TableStatus;
-import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface TableRepository extends JpaRepository<TableEntity, Integer>, JpaSpecificationExecutor<TableEntity> {
-    // Tìm table theo tableNumber
     Optional<TableEntity> findByTableNumber(Integer tableNumber);
-    
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<TableEntity> findByTableNumberAndTableStatus(Integer tableNumber, TableStatus tableStatus);
-    
-    // Tìm tables theo status
-    List<TableEntity> findByTableStatus(TableStatus tableStatus);
-    
-    // Tìm available tables
-    List<TableEntity> findByTableStatusOrderByTableNumberAsc(TableStatus tableStatus);
-    
-    // Kiểm tra xem table có tồn tại không
+
     boolean existsByTableNumber(Integer tableNumber);
 }

@@ -89,7 +89,7 @@ public class PaymentServiceImp implements PaymentService {
 
     @Override
     public Page<PaymentModel> filters(
-        Integer id, Integer orderId, Integer cashierId,
+        Integer id, String orderNumber, String cashierFullname,
         PaymentMethod paymentMethod, BigDecimal amount,
         PaymentStatus paymentStatus, String transactionId,
         Pageable pageable
@@ -98,7 +98,7 @@ public class PaymentServiceImp implements PaymentService {
         log.logInfo("Filtering payments with pagination ...!", logContext);
 
         List<FilterCondition<PaymentEntity>> conditions = buildFilterConditions(
-            id, orderId, cashierId, paymentMethod,
+            id, orderNumber, cashierFullname, paymentMethod,
             amount, paymentStatus, transactionId
         );
 
@@ -144,25 +144,13 @@ public class PaymentServiceImp implements PaymentService {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating payment ...!", logContext);
 
-        UserEntity actor = userEntityUtils.requireAuthenticatedUser("PaymentModel", logContext, log);
-        enforceCashierIdMatchesActorIfCashier(actor, paymentRequest.getCashierId(), logContext);
+        OrderEntity order = resolveOrderByOrderNumber(paymentRequest.getOrderNumber(), logContext);
+        orderRepository.lockByIdForPayment(order.getId());
 
-        OrderEntity order = orderRepository.lockByIdForPayment(paymentRequest.getOrderId()).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Order not found with id: " + paymentRequest.getOrderId(),
-                Collections.singletonList(paymentRequest.getOrderId()),
-                "OrderModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
+        UserEntity cashier = userEntityUtils.requireAuthenticatedUser("PaymentModel", logContext, log);
 
         assertOrderAllowsNewPayment(order, logContext);
-        BigDecimal amount = normalizeAmount(paymentRequest.getAmount());
-        enforceAllocatingCapacity(order, amount, logContext);
-
-        UserEntity cashier = userEntityUtils.requireById(paymentRequest.getCashierId(), "PaymentModel", logContext, log);
-        enforceCashierUserRoleIsCashier(cashier, logContext);
+        BigDecimal amount = computeRemainingPayable(order, logContext);
 
         PaymentEntity paymentEntity = new PaymentEntity();
         paymentEntity.setOrder(order);
@@ -174,6 +162,9 @@ public class PaymentServiceImp implements PaymentService {
         paymentEntity.setPaidAt(null);
 
         paymentRepository.save(paymentEntity);
+        if(paymentEntity.getId() != null && paymentEntity.getPaymentMethod() == PaymentMethod.VNPAY) {
+            paymentEntity.setTransactionId(String.valueOf(paymentEntity.getId()));
+        }
         paymentRepository.flush();
 
         clearPaymentAndOrderCaches(logContext);
@@ -204,41 +195,12 @@ public class PaymentServiceImp implements PaymentService {
         paymentRepository.save(payment);
         paymentRepository.flush();
 
-        maybeMarkOrderFullyPaid(orderRepository.lockByIdForPayment(resolveOrderId(payment)).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Order not found for payment: " + paymentId,
-                Collections.singletonList(paymentId),
-                "OrderModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        }), logContext);
+        OrderEntity order = resolveOrderByOrderNumber(payment.getOrder().getOrderNumber(), logContext);
+        orderRepository.lockByIdForPayment(order.getId());
+        maybeMarkOrderFullyPaid(order, logContext);
 
         clearPaymentAndOrderCaches(logContext);
 
-        return toPaymentModel(payment);
-    }
-
-    @Override
-    @Transactional
-    public PaymentModel markFailedFromGateway(Integer paymentId) {
-        // Đặt trạng thái FAILED cho giao dịch chờ (PENDING) sau khi VNPAY từ chối / lỗi — giữ idempotency ở lớp gọi.
-        LogContext logContext = getLogContext("markFailedFromGateway", Collections.singletonList(paymentId));
-        log.logInfo("Marking payment FAILED from gateway ...!", logContext);
-
-        PaymentEntity payment = getPaymentById(paymentId, logContext);
-        if (!Objects.equals(payment.getPaymentStatus(), PaymentStatus.PENDING)) {
-            log.logWarn("skip mark FAILED — payment " + paymentId + " not PENDING", logContext);
-            return toPaymentModel(payment);
-        }
-
-        payment.setPaymentStatus(PaymentStatus.FAILED);
-        payment.setPaidAt(LocalDateTime.now());
-        paymentRepository.save(payment);
-        paymentRepository.flush();
-
-        clearPaymentAndOrderCaches(logContext);
-        log.logInfo("completed, payment " + paymentId + " marked FAILED", logContext);
         return toPaymentModel(payment);
     }
 
@@ -269,17 +231,40 @@ public class PaymentServiceImp implements PaymentService {
         return toPaymentModel(payment);
     }
 
+    @Override
+    @Transactional
+    public PaymentModel markFailedFromGateway(Integer paymentId) {
+        // Đặt trạng thái FAILED cho giao dịch chờ (PENDING) sau khi VNPAY từ chối / lỗi — giữ idempotency ở lớp gọi.
+        LogContext logContext = getLogContext("markFailedFromGateway", Collections.singletonList(paymentId));
+        log.logInfo("Marking payment FAILED from gateway ...!", logContext);
+
+        PaymentEntity payment = getPaymentById(paymentId, logContext);
+        if (!Objects.equals(payment.getPaymentStatus(), PaymentStatus.PENDING)) {
+            log.logWarn("skip mark FAILED — payment " + paymentId + " not PENDING", logContext);
+            return toPaymentModel(payment);
+        }
+
+        payment.setPaymentStatus(PaymentStatus.FAILED);
+        payment.setPaidAt(LocalDateTime.now());
+        paymentRepository.save(payment);
+        paymentRepository.flush();
+
+        clearPaymentAndOrderCaches(logContext);
+        log.logInfo("completed, payment " + paymentId + " marked FAILED", logContext);
+        return toPaymentModel(payment);
+    }
+
     // private method
 
     private PaymentModel toPaymentModel(PaymentEntity paymentEntity) {
-        PaymentModel m = modelMapper.map(paymentEntity, PaymentModel.class);
+        PaymentModel paymentModel = modelMapper.map(paymentEntity, PaymentModel.class);
         if (paymentEntity.getOrder() != null) {
-            m.setOrderId(paymentEntity.getOrder().getId());
+            paymentModel.setOrderNumber(paymentEntity.getOrder().getOrderNumber());
         }
         if (paymentEntity.getCashier() != null) {
-            m.setCashierId(paymentEntity.getCashier().getId());
+            paymentModel.setCashierFullname(paymentEntity.getCashier().getFullname());
         }
-        return m;
+        return paymentModel;
     }
 
     private PaymentEntity getPaymentById(Integer paymentId, LogContext logContext) {
@@ -294,29 +279,35 @@ public class PaymentServiceImp implements PaymentService {
         });
     }
 
-    private Integer resolveOrderId(PaymentEntity payment) {
-        if (payment.getOrder() != null) {
-            return payment.getOrder().getId();
-        }
-        Integer id = payment.getOrderId();
-        if (id == null) {
-            throw new IllegalStateException("Payment has no order reference");
-        }
-        return id;
+    private OrderEntity resolveOrderByOrderNumber(String orderNumber, LogContext logContext) {
+        return orderRepository.findByOrderNumber(orderNumber).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Order not found with orderNumber: " + orderNumber,
+                Collections.singletonList(orderNumber),
+                "OrderModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            return e;
+        });
     }
 
     private void maybeMarkOrderFullyPaid(OrderEntity order, LogContext logContext) {
+        // bỏ qua nếu totalAmount is null hoặc orderStatus is CANCELLED
         if (order.getTotalAmount() == null || order.getOrderStatus() == OrderStatus.CANCELLED) {
             return;
         }
+        // bỏ qua nếu status không phải là READY hoặc SERVED
         if (!ALLOW_AUTO_COMPLETE_ON_FULL_PAYMENT.contains(order.getOrderStatus())) {
             return;
         }
+        // lấy tổng của các payment đã được completed
         BigDecimal completedSum = Objects.requireNonNullElse(
             paymentRepository.sumCompletedAmountByOrderId(order.getId()),
             BigDecimal.ZERO
         ).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        // lấy tổng amount của đơn
         BigDecimal total = order.getTotalAmount().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        // nếu completedSum bằng tổng amount của đơn thì đóng đơn
         if (completedSum.compareTo(total) == 0) {
             OrderStatusTransitionUtils.applyOrderStatusTransition(order, OrderStatus.COMPLETED);
             orderRepository.save(order);
@@ -324,45 +315,17 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
-    private void enforceCashierIdMatchesActorIfCashier(
-        UserEntity actor,
-        Integer cashierIdFromRequest,
-        LogContext logContext
-    ) {
-        if (actor.getRole() == UserRole.CASHIER
-            && !Objects.equals(actor.getId(), cashierIdFromRequest)) {
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Cashier may only register payments where cashierId is their own user id",
-                "PaymentModel",
-                "cashierId must match authenticated cashier"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-    }
-
-    /** Thu ngân có thể là CASHIER hoặc MANAGER/ADMIN khi tự thao tác (vd. VNPAY lấy user từ SecurityContext). */
-    private void enforceCashierUserRoleIsCashier(UserEntity cashier, LogContext logContext) {
-        UserRole r = cashier.getRole();
-        if (r != UserRole.CASHIER && r != UserRole.MANAGER && r != UserRole.ADMIN) {
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Payment must be registered by CASHIER, MANAGER, or ADMIN",
-                "PaymentModel",
-                "cashier role must be CASHIER, MANAGER or ADMIN"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-    }
-
+    // Kiểm tra xem đơn có thể nhận thanh toán không
     private void assertOrderAllowsNewPayment(OrderEntity order, LogContext logContext) {
-        OrderStatus st = order.getOrderStatus();
-        if (st == null
-            || st == OrderStatus.PENDING
-            || st == OrderStatus.CANCELLED
-            || st == OrderStatus.COMPLETED) {
+        OrderStatus orderStatus = order.getOrderStatus();
+        if (
+            orderStatus == null ||
+            orderStatus == OrderStatus.PENDING ||
+            orderStatus == OrderStatus.CANCELLED ||
+            orderStatus == OrderStatus.COMPLETED
+        ) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Order is not payable in its current status: " + st,
+                "Order is not payable in its current status: " + orderStatus,
                 "PaymentModel",
                 "orderStatus must not be PENDING, CANCELLED or COMPLETED"
             );
@@ -387,27 +350,29 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
-    private void enforceAllocatingCapacity(OrderEntity order, BigDecimal newPaymentAmount, LogContext logContext) {
+    /** Số tiền còn lại của đơn = total − Σ(PENDING + COMPLETED); server tự tính để tránh nhập sai/tampering. */
+    private BigDecimal computeRemainingPayable(OrderEntity order, LogContext logContext) {
+        // lấy tổng amount của các payment ( lần đầu khi init payment sẽ luôn là 0 vì chưa có payment nào )
         BigDecimal allocated = Objects.requireNonNullElse(
             paymentRepository.sumAmountByOrderIdAndPaymentStatuses(order.getId(), ALLOCATING_STATUSES),
             BigDecimal.ZERO
         ).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        // lấy tổng amount của đơn
         BigDecimal totalCap = order.getTotalAmount().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-        BigDecimal after = allocated.add(newPaymentAmount);
-        if (after.compareTo(totalCap) > 0) {
-            throw new ValidationExceptionHandle(
-                String.format(
-                    "Payment would exceed order total (allocated %.2f + new %.2f > %.2f)",
-                    allocated, newPaymentAmount, totalCap
-                ),
+        // nếu đã tồn tại payment đó rồi thì sẽ lấy totalAmountPayment - totalAmountOrder = 0, throw error
+        // nên sẽ không có payment nào bị trùng với trang thái pending bị dư thừa làm lệch tính tổng payment được ghi nhận
+        // look order chỉ giải quyết khi bất đồng bộ còn khi đồng bộ thì đây sẽ là bảo hiểm
+        BigDecimal remaining = totalCap.subtract(allocated); // totalCap - allocated
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "No remaining amount to pay (order fully allocated or has PENDING payment)",
                 Collections.singletonList(order.getId()),
                 "PaymentModel"
             );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
         }
-    }
-
-    private static BigDecimal normalizeAmount(BigDecimal raw) {
-        return raw.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        return remaining;
     }
 
     private void clearPaymentAndOrderCaches(LogContext logContext) {
@@ -417,7 +382,7 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     private List<FilterCondition<PaymentEntity>> buildFilterConditions(
-        Integer id, Integer orderId, Integer cashierId,
+        Integer id, String orderNumber, String cashierFullname,
         PaymentMethod paymentMethod, BigDecimal amount,
         PaymentStatus paymentStatus, String transactionId
     ) {
@@ -425,11 +390,11 @@ public class PaymentServiceImp implements PaymentService {
         if(id != null && id > 0) {
             conditions.add(FilterCondition.eq("id", id));
         }
-        if(orderId != null) {
-            conditions.add(FilterCondition.eq("orderId", orderId));
+        if(StringUtils.hasText(orderNumber)) {
+            conditions.add(FilterCondition.likeIgnoreCase("order.orderNumber", orderNumber));
         }
-        if(cashierId != null) {
-            conditions.add(FilterCondition.eq("cashierId", cashierId));
+        if(StringUtils.hasText(cashierFullname)) {
+            conditions.add(FilterCondition.likeIgnoreCase("cashier.fullname", cashierFullname));
         }
         if(paymentMethod != null) {
             conditions.add(FilterCondition.eq("paymentMethod", paymentMethod));
