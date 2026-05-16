@@ -31,4 +31,10 @@ public interface OrderService {
     List<OrderModel> updateByAdmin(List<OrderAdminRequestModel> updates, List<Integer> orderIds);
     OrderModel submit(Integer orderId);
     OrderModel cancel(Integer orderId);
+
+    // Hủy đơn PENDING quá hạn (scheduler) — trả bàn cho khách/đặt bàn khác.
+    int expireStalePendingOrders();
+
+    /** CONFIRMED chưa thanh toán đủ (DINE_IN + DELIVERY): hủy đơn + payment treo sau TTL. */
+    int expireStaleConfirmedUnpaidOrders();
 }

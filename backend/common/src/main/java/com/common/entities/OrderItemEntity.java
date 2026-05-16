@@ -9,7 +9,7 @@ import lombok.AllArgsConstructor;
 
 import java.math.BigDecimal;
 
-import com.common.enums.OrderItemStatus;
+import com.common.enums.OrderStatus;
 
 @Entity
 @Table(name = "order_items")
@@ -28,7 +28,7 @@ public class OrderItemEntity extends BaseEntity {
     private String specialInstructions;
     @Column(name = "order_item_status", nullable = false)
     @Enumerated(EnumType.STRING)
-    private OrderItemStatus orderItemStatus;
+    private OrderStatus orderItemStatus;
 
     // version
     @Version

@@ -6,7 +6,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -22,13 +21,16 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.app.services.OrderItemStatusSyncService;
 import com.app.services.PaymentService;
+import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.entities.OrderEntity;
 import com.common.entities.PaymentEntity;
 import com.common.entities.UserEntity;
 import com.common.enums.OrderStatus;
+import com.common.enums.OrderType;
 import com.common.enums.PaymentMethod;
 import com.common.enums.PaymentStatus;
 import com.common.enums.UserRole;
@@ -59,10 +61,6 @@ public class PaymentServiceImp implements PaymentService {
 
     private static final int AMOUNT_SCALE = 2;
 
-    /** Khi đủ tiền, chỉ đóng đơn tự động khi luồng phục vụ đã đến bước gần xong — tránh COMPLETED sai khi chỉ CONFIRMED. */
-    private static final EnumSet<OrderStatus> ALLOW_AUTO_COMPLETE_ON_FULL_PAYMENT =
-        EnumSet.of(OrderStatus.READY, OrderStatus.SERVED);
-
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
@@ -77,6 +75,10 @@ public class PaymentServiceImp implements PaymentService {
     private ModelMapper modelMapper;
     @Autowired
     private UserEntityUtils userEntityUtils;
+    @Autowired
+    private OrderItemStatusSyncService orderItemStatusSyncService;
+    @Autowired
+    private TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> paymentIds) {
         return LogContext.builder()
@@ -149,6 +151,7 @@ public class PaymentServiceImp implements PaymentService {
 
         UserEntity cashier = userEntityUtils.requireAuthenticatedUser("PaymentModel", logContext, log);
 
+        assertPaymentActorMayInitiate(order, cashier, paymentRequest.getPaymentMethod(), logContext);
         assertOrderAllowsNewPayment(order, logContext);
         BigDecimal amount = computeRemainingPayable(order, logContext);
 
@@ -197,7 +200,7 @@ public class PaymentServiceImp implements PaymentService {
 
         OrderEntity order = resolveOrderByOrderNumber(payment.getOrder().getOrderNumber(), logContext);
         orderRepository.lockByIdForPayment(order.getId());
-        maybeMarkOrderFullyPaid(order, logContext);
+        maybeAdvanceOrderToPreparingAfterFullPayment(order, logContext);
 
         clearPaymentAndOrderCaches(logContext);
 
@@ -310,43 +313,95 @@ public class PaymentServiceImp implements PaymentService {
         });
     }
 
-    private void maybeMarkOrderFullyPaid(OrderEntity order, LogContext logContext) {
-        // bỏ qua nếu totalAmount is null hoặc orderStatus is CANCELLED
-        if (order.getTotalAmount() == null || order.getOrderStatus() == OrderStatus.CANCELLED) {
+    /** CONFIRMED + đủ tiền → PREPARING (bếp); COMPLETED do quầy xác nhận phục vụ. */
+    private void maybeAdvanceOrderToPreparingAfterFullPayment(OrderEntity order, LogContext logContext) {
+        if (order.getTotalAmount() == null || order.getOrderStatus() != OrderStatus.CONFIRMED) {
             return;
         }
-        // bỏ qua nếu status không phải là READY hoặc SERVED
-        if (!ALLOW_AUTO_COMPLETE_ON_FULL_PAYMENT.contains(order.getOrderStatus())) {
-            return;
-        }
-        // lấy tổng của các payment đã được completed
         BigDecimal completedSum = Objects.requireNonNullElse(
             paymentRepository.sumCompletedAmountByOrderId(order.getId()),
             BigDecimal.ZERO
         ).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-        // lấy tổng amount của đơn
         BigDecimal total = order.getTotalAmount().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-        // nếu completedSum bằng tổng amount của đơn thì đóng đơn
-        if (completedSum.compareTo(total) == 0) {
-            OrderStatusTransitionUtils.applyOrderStatusTransition(order, OrderStatus.COMPLETED);
-            orderRepository.save(order);
-            log.logInfo("Order " + order.getId() + " marked COMPLETED (payments cover total)", logContext);
+        if (completedSum.compareTo(total) != 0) {
+            return;
         }
+        OrderStatus previousStatus = order.getOrderStatus();
+        if (!OrderStatusTransitionUtils.applyPreparingAfterFullPayment(order)) {
+            return;
+        }
+        orderItemStatusSyncService.syncItemsWithOrderStatus(
+            order.getId(), OrderStatus.PREPARING, previousStatus
+        );
+        orderRepository.save(order);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
+        log.logInfo("Order " + order.getId() + " advanced to PREPARING (fully paid at CONFIRMED)", logContext);
     }
 
     // Kiểm tra xem đơn có thể nhận thanh toán không
+    @Override
+    public boolean canAcceptNewPayment(OrderEntity order, int orderItemCount, BigDecimal allocatedAmount) {
+        if (order == null || orderItemCount < 1) {
+            return false;
+        }
+        if (order.getOrderStatus() != OrderStatus.CONFIRMED) {
+            return false;
+        }
+        BigDecimal total = order.getTotalAmount();
+        if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+        BigDecimal allocated = Objects.requireNonNullElse(allocatedAmount, BigDecimal.ZERO)
+            .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal totalCap = total.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        return totalCap.subtract(allocated).compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    private void assertPaymentActorMayInitiate(
+        OrderEntity order,
+        UserEntity actor,
+        PaymentMethod method,
+        LogContext logContext
+    ) {
+        if (actor.getRole() != UserRole.CUSTOMER) {
+            return;
+        }
+        if (order.getOrderType() != OrderType.DELIVERY) {
+            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+                "Customers can only pay for delivery orders online",
+                "PaymentModel",
+                "orderType must be DELIVERY"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        if (!Objects.equals(order.getCustomerEmail(), actor.getEmail())) {
+            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+                "You can only pay for your own orders",
+                "PaymentModel",
+                "order owner must match authenticated customer"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        if (method != PaymentMethod.VNPAY) {
+            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+                "Delivery customers must use VNPAY for online payment",
+                "PaymentModel",
+                "paymentMethod must be VNPAY"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+    }
+
     private void assertOrderAllowsNewPayment(OrderEntity order, LogContext logContext) {
         OrderStatus orderStatus = order.getOrderStatus();
-        if (
-            orderStatus == null ||
-            orderStatus == OrderStatus.PENDING ||
-            orderStatus == OrderStatus.CANCELLED ||
-            orderStatus == OrderStatus.COMPLETED
-        ) {
+        if (orderStatus != OrderStatus.CONFIRMED) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
                 "Order is not payable in its current status: " + orderStatus,
                 "PaymentModel",
-                "orderStatus must not be PENDING, CANCELLED or COMPLETED"
+                "orderStatus must be CONFIRMED"
             );
             log.logError(e.getMessage(), e, logContext);
             throw e;

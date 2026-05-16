@@ -144,7 +144,7 @@ export async function apiFetch<T>(
 export function buildPageParams(
   page: number,
   size: number,
-  extra?: Record<string, string | number | undefined | null>,
+  extra?: Record<string, string | number | boolean | undefined | null>,
 ): string {
   const p = new URLSearchParams();
   p.set("page", String(page));

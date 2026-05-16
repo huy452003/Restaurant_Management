@@ -7,7 +7,7 @@ import { birthDdMmYyyyToInputDate, formatBirthDdMmYyyy } from "@/lib/dates";
 
 import { STAFF_ROLE_LABEL_VI } from "@/lib/staff/role-labels";
 
-const ROLES: UserRole[] = ["ADMIN", "CUSTOMER", "MANAGER", "WAITER", "CHEF", "CASHIER"];
+const ROLES: UserRole[] = ["ADMIN", "CUSTOMER", "MANAGER", "CHEF", "CASHIER"];
 
 const STATUSES = ["ACTIVE", "INACTIVE", "PENDING"] as const;
 

@@ -1,18 +1,25 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.app.services.OrderItemStatusSyncService;
 import com.app.services.OrderService;
 import com.app.services.PaymentService;
+import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
+import com.app.utils.OrderTableHoldUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.entities.TableEntity;
 import com.common.repositories.OrderItemRepository;
 import com.common.repositories.OrderRepository;
+import com.common.repositories.PaymentRepository;
 import com.common.repositories.TableRepository;
 import com.common.repositories.UserRepository;
+import com.common.enums.PaymentStatus;
 import com.common.specifications.FilterCondition;
 import com.common.specifications.SpecificationHelper;
 import com.common.utils.FilterPageCacheFacade;
@@ -23,6 +30,7 @@ import com.common.entities.OrderEntity;
 import com.common.entities.UserEntity;
 import com.common.enums.OrderStatus;
 import com.common.enums.OrderType;
+import com.common.enums.TableStatus;
 import com.common.enums.UserRole;
 
 import org.springframework.data.domain.Page;
@@ -39,6 +47,11 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.ArrayList;
@@ -55,6 +68,8 @@ import org.modelmapper.ModelMapper;
 public class OrderServiceImp implements OrderService {
     @Autowired
     private OrderRepository orderRepository;
+    @Autowired
+    private PaymentRepository paymentRepository;
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
     @Autowired
@@ -73,6 +88,16 @@ public class OrderServiceImp implements OrderService {
     private OrderItemRepository orderItemRepository;
     @Autowired
     private PaymentService paymentService;
+    @Autowired
+    private OrderItemStatusSyncService orderItemStatusSyncService;
+    @Autowired
+    private TableStatusSyncService tableStatusSyncService;
+
+    @Value("${order.pending.expiry-minutes:5}")
+    private int pendingOrderExpiryMinutes;
+
+    @Value("${order.confirmed.unpaid.expiry-minutes:30}")
+    private int confirmedUnpaidExpiryMinutes;
 
     private LogContext getLogContext(String methodName, List<Integer> orderIds) {
         return LogContext.builder()
@@ -84,6 +109,7 @@ public class OrderServiceImp implements OrderService {
     }
 
     private static final String ORDER_REDIS_KEY_PREFIX = "order:";
+    private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
     @Override
     public Page<OrderModel> filtersForCustomer(
@@ -161,6 +187,8 @@ public class OrderServiceImp implements OrderService {
             this::toOrderModelWithoutItemCount
         ).collect(Collectors.toList());
         applyTotalOrderItemCounts(pageEntities.getContent(), pageDatas);
+        applyCanAcceptPayment(pageEntities.getContent(), pageDatas);
+        applyAllowedOrderStatuses(pageEntities.getContent(), pageDatas);
 
         Page<OrderModel> orderModelPage = new PageImpl<>(
             pageDatas, pageEntities.getPageable(), pageEntities.getTotalElements()
@@ -188,7 +216,7 @@ public class OrderServiceImp implements OrderService {
         orderEntity.setCustomerName(currentUser.getFullname());
         orderEntity.setCustomerPhone(currentUser.getPhone());
         orderEntity.setCustomerEmail(currentUser.getEmail());
-        orderEntity.setTable(getTable(order.getTableNumber(), logContext));
+        assignTableForOrder(orderEntity, order.getOrderType(), order.getTableNumber(), currentUser, logContext);
         orderEntity.setOrderStatus(OrderStatus.PENDING);
         orderEntity.setWaiterId(null);
         orderEntity.setSubTotal(null);
@@ -198,7 +226,7 @@ public class OrderServiceImp implements OrderService {
 
         orderRepository.save(orderEntity);
 
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
+        clearOrderAndTableCaches(logContext);
 
         log.logInfo("Deleted filter caches after create", logContext);
         
@@ -229,11 +257,13 @@ public class OrderServiceImp implements OrderService {
             throw e;
         }
 
-        Boolean hasChanges = !Objects.equals(update.getTableNumber(), foundOrder.getTable().getTableNumber()) ||
+        Integer currentTableNumber = foundOrder.getTable() != null
+            ? foundOrder.getTable().getTableNumber() : null;
+        Boolean hasChanges = !Objects.equals(update.getTableNumber(), currentTableNumber) ||
                              !Objects.equals(update.getOrderType(), foundOrder.getOrderType()) ||
                              !Objects.equals(update.getNotes(), foundOrder.getNotes());
         if (hasChanges) {
-            foundOrder.setTable(getTable(update.getTableNumber(), logContext));
+            assignTableForOrder(foundOrder, update.getOrderType(), update.getTableNumber(), currentUser, logContext);
             foundOrder.setOrderType(update.getOrderType());
             foundOrder.setNotes(update.getNotes());
             orderRepository.save(foundOrder);
@@ -252,7 +282,11 @@ public class OrderServiceImp implements OrderService {
         LogContext logContext = getLogContext(
             "updateByAdmin", orderIds != null ? orderIds : Collections.emptyList()
         );
-        log.logInfo("Updating orders by admin/manager ...!", logContext);
+        log.logInfo("Updating orders by staff ...!", logContext);
+
+        UserEntity actingUser = userEntityUtils.requireAuthenticatedUser(
+            "OrderModel", logContext, log
+        );
 
         if(updates.size() != orderIds.size()){
             ValidationExceptionHandle e = new ValidationExceptionHandle(
@@ -289,37 +323,8 @@ public class OrderServiceImp implements OrderService {
         Map<String, UserEntity> customersByEmail = userRepository.findByEmailIn(customerEmails).stream()
             .collect(Collectors.toMap(UserEntity::getEmail, Function.identity()));
 
-        List<Integer> waiterIds = updates.stream()
-            .map(OrderAdminRequestModel::getWaiterId)
-            .filter(Objects::nonNull)
-            .distinct()
-            .collect(Collectors.toList());
-        Map<Integer, UserEntity> waitersById = userRepository.findAllById(waiterIds).stream()
-            .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
-
-        for (Integer waiterId : waiterIds) {
-            UserEntity waiterUser = waitersById.get(waiterId);
-            if (waiterUser == null) {
-                NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                    "User not found with id: " + waiterId,
-                    Collections.singletonList(waiterId),
-                    "OrderModel"
-                );
-                log.logError(e.getMessage(), e, logContext);
-                throw e;
-            }
-            if (!isWaiterRole(waiterUser.getRole())) {
-                ValidationExceptionHandle e = new ValidationExceptionHandle(
-                    "Waiter Id not true, please check again with true waiter",
-                    Collections.singletonList(waiterId),
-                    "OrderModel"
-                );
-                log.logError(e.getMessage(), e, logContext);
-                throw e;
-            }
-        }
-
         List<OrderEntity> ordersToUpdate = new ArrayList<>();
+        Set<Integer> tablesToRecheck = new HashSet<>();
         Iterator<OrderAdminRequestModel> orderIterator = updates.iterator();
         Iterator<OrderEntity> currentOrderIterator = foundOrders.iterator();
 
@@ -327,15 +332,22 @@ public class OrderServiceImp implements OrderService {
             OrderAdminRequestModel update = orderIterator.next();
             OrderEntity current = currentOrderIterator.next();
 
+            Integer currentWaiterId = current.getWaiter() != null ? current.getWaiter().getId() : null;
+
+            Integer currentTableNumber = current.getTable() != null
+                ? current.getTable().getTableNumber() : null;
+
             Boolean hasChanges = !Objects.equals(update.getCustomerName(), current.getCustomerName()) ||
                                  !Objects.equals(update.getCustomerPhone(), current.getCustomerPhone()) ||
                                  !Objects.equals(update.getCustomerEmail(), current.getCustomerEmail()) ||
-                                 !Objects.equals(update.getTableNumber(), current.getTable().getTableNumber()) ||
-                                 !Objects.equals(update.getWaiterId(), current.getWaiterId()) ||
+                                 !Objects.equals(update.getTableNumber(), currentTableNumber) ||
+                                 !Objects.equals(actingUser.getId(), currentWaiterId) ||
                                  !Objects.equals(update.getOrderStatus(), current.getOrderStatus()) ||
                                  !Objects.equals(update.getOrderType(), current.getOrderType()) ||
                                  !Objects.equals(update.getNotes(), current.getNotes());
             if(hasChanges) {
+                Integer tableNumberBefore = current.getTable() != null
+                    ? current.getTable().getTableNumber() : null;
                 UserEntity customerUser = customersByEmail.get(update.getCustomerEmail());
                 if (customerUser == null) {
                     NotFoundExceptionHandle e = new NotFoundExceptionHandle(
@@ -354,25 +366,22 @@ public class OrderServiceImp implements OrderService {
                 current.setCustomerName(customerUser.getFullname());
                 current.setCustomerPhone(customerUser.getPhone());
                 current.setCustomerEmail(customerUser.getEmail());
-                current.setTable(getTable(update.getTableNumber(), logContext));
-                if (update.getWaiterId() == null) {
-                    current.setWaiter(null);
-                } else {
-                    UserEntity waiterUser = waitersById.get(update.getWaiterId());
-                    if (waiterUser == null) {
-                        NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                            "User not found with id: " + update.getWaiterId(),
-                            Collections.singletonList(update.getWaiterId()),
-                            "OrderModel"
-                        );
-                        log.logError(e.getMessage(), e, logContext);
-                        throw e;
-                    }
-                    current.setWaiter(waiterUser);
-                }
-                OrderStatusTransitionUtils.applyOrderStatusTransition(current, requestedStatus);
+                assignTableForOrder(current, update.getOrderType(), update.getTableNumber(), null, logContext);
+                current.setWaiter(actingUser);
+                OrderStatusTransitionUtils.applyOrderStatusTransition(
+                    current, requestedStatus, hasCompletedPayment(current.getId())
+                );
                 if (requestedStatus == OrderStatus.CANCELLED && statusBeforeMap != OrderStatus.CANCELLED) {
                     paymentService.cancelPendingPaymentsForOrder(current.getId());
+                }
+                orderItemStatusSyncService.syncItemsWithOrderStatus(
+                    current.getId(), requestedStatus, statusBeforeMap
+                );
+                if (tableNumberBefore != null) {
+                    tablesToRecheck.add(tableNumberBefore);
+                }
+                if (current.getTable() != null) {
+                    tablesToRecheck.add(current.getTable().getTableNumber());
                 }
                 ordersToUpdate.add(current);
             }
@@ -380,6 +389,7 @@ public class OrderServiceImp implements OrderService {
 
         if(!ordersToUpdate.isEmpty()) {
             orderRepository.saveAll(ordersToUpdate);
+            tablesToRecheck.forEach(tableStatusSyncService::syncTableStatus);
             log.logInfo("completed, updated " + ordersToUpdate.size() + " orders", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
@@ -391,6 +401,8 @@ public class OrderServiceImp implements OrderService {
             this::toOrderModelWithoutItemCount
         ).collect(Collectors.toList());
         applyTotalOrderItemCounts(foundOrders, orderModels);
+        applyCanAcceptPayment(foundOrders, orderModels);
+        applyAllowedOrderStatuses(foundOrders, orderModels);
         return orderModels;
     }
 
@@ -425,14 +437,23 @@ public class OrderServiceImp implements OrderService {
             throw e;
         }
 
+        OrderStatus previousSubmitStatus = foundOrder.getOrderStatus();
         OrderStatusTransitionUtils.applyOrderStatusTransition(foundOrder, OrderStatus.CONFIRMED);
+        orderItemStatusSyncService.syncItemsWithOrderStatus(
+            foundOrder.getId(), OrderStatus.CONFIRMED, previousSubmitStatus
+        );
         orderRepository.save(foundOrder);
+
+        if (foundOrder.getOrderType() == OrderType.DINE_IN && foundOrder.getTable() != null) {
+            tableStatusSyncService.syncTableStatus(foundOrder.getTable().getTableNumber());
+        }
+
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
         log.logInfo("completed, submitted order with id: " + orderId, logContext);
 
         return toOrderModel(foundOrder);
     }
-        
+
     @Override
     public OrderModel cancel(Integer orderId) {
         LogContext logContext = getLogContext("cancel", Collections.singletonList(orderId));
@@ -454,21 +475,86 @@ public class OrderServiceImp implements OrderService {
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
-
-        OrderStatusTransitionUtils.applyOrderStatusTransition(foundOrder, OrderStatus.CANCELLED);
-        orderRepository.save(foundOrder);
-        paymentService.cancelPendingPaymentsForOrder(foundOrder.getId());
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
+        cancelOrderAndSyncTable(foundOrder, logContext);
         log.logInfo("completed, cancelled order with id: " + orderId, logContext);
-
         return toOrderModel(foundOrder);
+    }
+
+    @Override
+    @Transactional
+    public int expireStalePendingOrders() {
+        LogContext logContext = getLogContext("expireStalePendingOrders", Collections.emptyList());
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(pendingOrderExpiryMinutes);
+        List<OrderEntity> stale = orderRepository.findByOrderStatusAndCreatedAtBefore(
+            OrderStatus.PENDING, cutoff
+        );
+        for (OrderEntity order : stale) {
+            cancelOrderAndSyncTable(order, logContext);
+            log.logInfo(
+                "Expired stale PENDING order id=" + order.getId()
+                    + " table=" + (order.getTable() != null ? order.getTable().getTableNumber() : null),
+                logContext
+            );
+        }
+        return stale.size();
+    }
+
+    @Override
+    @Transactional
+    public int expireStaleConfirmedUnpaidOrders() {
+        LogContext logContext = getLogContext("expireStaleConfirmedUnpaidOrders", Collections.emptyList());
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(confirmedUnpaidExpiryMinutes);
+
+        Set<Integer> orderIds = new LinkedHashSet<>();
+        orderIds.addAll(
+            orderRepository.findWithStalePendingPaymentAndNoCompleted(
+                OrderStatus.CONFIRMED,
+                PaymentStatus.PENDING,
+                PaymentStatus.COMPLETED,
+                cutoff
+            ).stream().map(OrderEntity::getId).collect(Collectors.toList())
+        );
+        orderIds.addAll(
+            orderRepository.findConfirmedWithoutPaymentsOlderThan(OrderStatus.CONFIRMED, cutoff)
+                .stream().map(OrderEntity::getId).collect(Collectors.toList())
+        );
+        orderIds.addAll(
+            orderRepository.findConfirmedWithOnlyTerminalPaymentsOlderThan(
+                OrderStatus.CONFIRMED,
+                Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED),
+                cutoff
+            ).stream().map(OrderEntity::getId).collect(Collectors.toList())
+        );
+
+        int cancelled = 0;
+        for (Integer orderId : orderIds) {
+            OrderEntity order = orderRepository.findById(orderId).orElse(null);
+            if (order == null || order.getOrderStatus() != OrderStatus.CONFIRMED) {
+                continue;
+            }
+            if (hasCompletedPayment(orderId)) {
+                continue;
+            }
+            cancelOrderAndSyncTable(order, logContext);
+            cancelled++;
+            log.logInfo(
+                "Expired stale CONFIRMED unpaid order id=" + orderId
+                    + " orderNumber=" + order.getOrderNumber()
+                    + " type=" + order.getOrderType(),
+                logContext
+            );
+        }
+        return cancelled;
     }
 
     // private method
 
     private OrderModel toOrderModel(OrderEntity orderEntity) {
         OrderModel orderModel = toOrderModelWithoutItemCount(orderEntity);
-        orderModel.setTotalOrderItem(Math.toIntExact(orderItemRepository.countByOrder_Id(orderEntity.getId())));
+        int itemCount = Math.toIntExact(orderItemRepository.countByOrder_Id(orderEntity.getId()));
+        orderModel.setTotalOrderItem(itemCount);
+        orderModel.setCanAcceptPayment(resolveCanAcceptPayment(orderEntity, itemCount));
+        orderModel.setAllowedOrderStatuses(resolveAllowedOrderStatuses(orderEntity));
         return orderModel;
     }
 
@@ -503,6 +589,68 @@ public class OrderServiceImp implements OrderService {
         }
     }
 
+    private void applyCanAcceptPayment(List<OrderEntity> orders, List<OrderModel> models) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        List<Integer> orderIds = orders.stream().map(OrderEntity::getId).collect(Collectors.toList());
+        Map<Integer, BigDecimal> allocatedByOrderId = paymentRepository
+            .sumAllocatedAmountsByOrderIds(orderIds, Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED))
+            .stream()
+            .collect(Collectors.toMap(
+                row -> (Integer) row[0],
+                row -> (BigDecimal) row[1]
+            ));
+        for (int i = 0; i < orders.size(); i++) {
+            OrderEntity order = orders.get(i);
+            OrderModel model = models.get(i);
+            BigDecimal allocated = allocatedByOrderId.getOrDefault(order.getId(), BigDecimal.ZERO);
+            model.setCanAcceptPayment(
+                paymentService.canAcceptNewPayment(order, model.getTotalOrderItem(), allocated)
+            );
+        }
+    }
+
+    private Boolean resolveCanAcceptPayment(OrderEntity order, int orderItemCount) {
+        BigDecimal allocated = Objects.requireNonNullElse(
+            paymentRepository.sumAmountByOrderIdAndPaymentStatuses(
+                order.getId(), Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED)
+            ),
+            BigDecimal.ZERO
+        );
+        return paymentService.canAcceptNewPayment(order, orderItemCount, allocated);
+    }
+
+    private void applyAllowedOrderStatuses(List<OrderEntity> orders, List<OrderModel> models) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        List<Integer> orderIds = orders.stream().map(OrderEntity::getId).collect(Collectors.toList());
+        Set<Integer> paidOrderIds = new HashSet<>(
+            paymentRepository.findDistinctOrderIdsByOrderIdInAndPaymentStatus(
+                orderIds, PaymentStatus.COMPLETED
+            )
+        );
+        for (int i = 0; i < orders.size(); i++) {
+            OrderEntity order = orders.get(i);
+            boolean paid = paidOrderIds.contains(order.getId());
+            models.get(i).setAllowedOrderStatuses(
+                OrderStatusTransitionUtils.allowedTargetStatuses(order.getOrderStatus(), paid)
+            );
+        }
+    }
+
+    private List<OrderStatus> resolveAllowedOrderStatuses(OrderEntity order) {
+        return OrderStatusTransitionUtils.allowedTargetStatuses(
+            order.getOrderStatus(),
+            hasCompletedPayment(order.getId())
+        );
+    }
+
+    private boolean hasCompletedPayment(Integer orderId) {
+        return paymentRepository.existsByOrderIdAndPaymentStatus(orderId, PaymentStatus.COMPLETED);
+    }
+
     private OrderEntity getOrder(Integer orderId, LogContext logContext) {
         return orderRepository.findById(orderId).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
@@ -515,6 +663,34 @@ public class OrderServiceImp implements OrderService {
         });
     }
 
+    private void assignTableForOrder(
+        OrderEntity order,
+        OrderType orderType,
+        Integer tableNumber,
+        UserEntity customerActor,
+        LogContext logContext
+    ) {
+        if (orderType == OrderType.DELIVERY) {
+            order.setTable(null);
+            return;
+        }
+        if (tableNumber == null) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "Table number is required for dine-in orders",
+                Collections.singletonList(order.getId()),
+                "OrderModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        assertNoConflictingOrderOnTable(tableNumber, order.getId(), logContext);
+        TableEntity table = getTable(tableNumber, logContext);
+        if (customerActor != null && customerActor.getRole() == UserRole.CUSTOMER) {
+            assertTableAvailableForNewOrder(table, logContext);
+        }
+        order.setTable(table);
+    }
+
     private TableEntity getTable(Integer tableNumber, LogContext logContext) {
         return tableRepository.findByTableNumber(tableNumber).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
@@ -525,6 +701,71 @@ public class OrderServiceImp implements OrderService {
             log.logError(e.getMessage(), e, logContext);
             return e;
         });
+    }
+
+    private void assertTableAvailableForNewOrder(TableEntity table, LogContext logContext) {
+        if (table.getTableStatus() == TableStatus.AVAILABLE) {
+            return;
+        }
+        ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+            "Table is not available for new orders: " + table.getTableNumber()
+                + " (status: " + table.getTableStatus() + ")",
+            "OrderModel",
+            "table must be AVAILABLE"
+        );
+        log.logError(e.getMessage(), e, logContext);
+        throw e;
+    }
+
+    private void assertNoConflictingOrderOnTable(
+        Integer tableNumber,
+        Integer excludeOrderId,
+        LogContext logContext
+    ) {
+        if (tableNumber == null) {
+            return;
+        }
+        if (!orderRepository.existsActiveHoldingOrderOnTable(
+            tableNumber,
+            OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES,
+            excludeOrderId
+        )) {
+            return;
+        }
+        ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
+            "Table " + tableNumber
+                + " already has an active order (pending, confirmed, or preparing). "
+                + "Choose another table or complete/cancel the existing order first.",
+            "OrderModel",
+            "table has active holding order"
+        );
+        log.logError(e.getMessage(), e, logContext);
+        throw e;
+    }
+
+    private void cancelOrderAndSyncTable(OrderEntity foundOrder, LogContext logContext) {
+        OrderStatus previousStatus = foundOrder.getOrderStatus();
+        OrderStatusTransitionUtils.applyOrderStatusTransition(
+            foundOrder, OrderStatus.CANCELLED, hasCompletedPayment(foundOrder.getId())
+        );
+        orderItemStatusSyncService.syncItemsWithOrderStatus(
+            foundOrder.getId(), OrderStatus.CANCELLED, previousStatus
+        );
+        orderRepository.save(foundOrder);
+        paymentService.cancelPendingPaymentsForOrder(foundOrder.getId());
+
+        if (foundOrder.getTable() != null) {
+            tableStatusSyncService.syncTableStatus(foundOrder.getTable().getTableNumber());
+        }
+
+        clearOrderAndTableCaches(logContext);
+    }
+
+    private static String normalizeNotes(String notes) {
+        if (notes == null || notes.isBlank()) {
+            return null;
+        }
+        return notes.trim();
     }
 
     private void orderOwnerCheck(OrderEntity order, UserEntity currentUser, LogContext logContext) {
@@ -548,8 +789,9 @@ public class OrderServiceImp implements OrderService {
         return orderNumber;
     }
 
-    private boolean isWaiterRole(UserRole role) {
-        return Objects.equals(role, UserRole.WAITER);
+    private void clearOrderAndTableCaches(LogContext logContext) {
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
+        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
     }
 
     private List<FilterCondition<OrderEntity>> buildFilterConditions(

@@ -21,7 +21,7 @@ export default function StaffHomePage() {
       router.replace("/login?next=/staff");
       return;
     }
-    if (!hasRole("ADMIN", "MANAGER", "CASHIER", "WAITER", "CHEF")) {
+    if (!hasRole("ADMIN", "MANAGER", "CASHIER", "CHEF")) {
       router.replace("/menu");
     }
   }, [user, loading, hasRole, router]);

@@ -56,7 +56,7 @@ public class OrderEntity extends BaseEntity {
     private Long version;
 
     @ManyToOne
-    @JoinColumn(name = "table_number", referencedColumnName = "table_number")
+    @JoinColumn(name = "table_number", referencedColumnName = "table_number", nullable = true)
     private TableEntity table;
     @ManyToOne
     @JoinColumn(name = "waiter_id")

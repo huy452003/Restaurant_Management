@@ -3,9 +3,20 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { CustomerOrderEditDialog } from "@/components/customer/CustomerOrderEditDialog";
+import { OrderDetailDialog } from "@/components/OrderDetailDialog";
+import { StaffPaymentCreateDialog } from "@/components/staff/StaffPaymentCreateDialog";
 import { useAuth } from "@/context/auth-context";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
 import type { OrderModel, PaginatedResponse } from "@/lib/api/types";
+import {
+  canCustomerCancelOrder,
+  canCustomerEditOrder,
+  canCustomerSubmitOrder,
+} from "@/lib/orders/customer-order-actions";
+import { ORDER_STATUS_LABEL, ORDER_TYPE_LABEL } from "@/lib/orders/order-labels";
+import { canCustomerPayDeliveryOrder } from "@/lib/orders/customer-delivery-payment";
+import { canCreatePaymentForOrder } from "@/lib/orders/order-payment";
 import { formatVnd } from "@/lib/money";
 
 export default function OrdersPage() {
@@ -15,6 +26,10 @@ export default function OrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [detailOrder, setDetailOrder] = useState<OrderModel | null>(null);
+  const [editingOrder, setEditingOrder] = useState<OrderModel | null>(null);
+  const [payingOrder, setPayingOrder] = useState<OrderModel | null>(null);
+  const canManagePayment = hasRole("CASHIER", "MANAGER", "ADMIN");
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -84,7 +99,7 @@ export default function OrdersPage() {
             Đơn hàng
           </h1>
           <p className="mt-1 text-sm text-muted">
-            {hasRole("CUSTOMER") ? "Đơn của bạn — gửi bếp khi sẵn sàng." : "Theo dõi toàn bộ đơn trong hệ thống."}
+            {hasRole("CUSTOMER") ? "Xác nhận đơn của bạn khi sẵn sàng." : "Theo dõi toàn bộ đơn trong hệ thống."}
           </p>
         </div>
         <Link
@@ -108,7 +123,14 @@ export default function OrdersPage() {
         </p>
       ) : (
         <ul className="mt-8 space-y-4">
-          {orders.map((o) => (
+          {orders.map((o) => {
+            const showSubmit = canCustomerSubmitOrder(o.orderStatus);
+            const showCancel = canCustomerCancelOrder(o);
+            const showEdit = hasRole("CUSTOMER") && canCustomerEditOrder(o.orderStatus);
+            const showCustomerPay =
+              hasRole("CUSTOMER") && canCustomerPayDeliveryOrder(o);
+            const showStaffPay = canManagePayment && canCreatePaymentForOrder(o);
+            return (
             <li
               key={o.id}
               className="rounded-2xl border border-stone-200 bg-surface p-5 shadow-sm"
@@ -117,23 +139,44 @@ export default function OrdersPage() {
                 <div>
                   <p className="font-mono text-sm font-semibold text-brand-900">{o.orderNumber}</p>
                   <p className="mt-1 text-sm text-muted">
-                    Bàn {o.tableNumber} · {o.orderType} ·{" "}
-                    <span className="font-medium text-stone-800">{o.orderStatus}</span>
+                    {o.tableNumber != null ? `Bàn ${o.tableNumber} · ` : ""}
+                    {ORDER_TYPE_LABEL[o.orderType]} ·{" "}
+                    <span className="font-medium text-stone-800">
+                      {ORDER_STATUS_LABEL[o.orderStatus]}
+                    </span>
                   </p>
                   {o.totalAmount != null ? (
                     <p className="mt-2 text-lg font-semibold text-brand-800">{formatVnd(o.totalAmount)}</p>
                   ) : null}
                 </div>
-                {hasRole("CUSTOMER") ? (
-                  <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDetailOrder(o)}
+                    className="rounded-lg border border-stone-200 px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
+                  >
+                    Chi tiết
+                  </button>
+                  {showEdit ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditingOrder(o)}
+                      className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-900 hover:bg-brand-100"
+                    >
+                      Chỉnh sửa
+                    </button>
+                  ) : null}
+                  {hasRole("CUSTOMER") && showSubmit ? (
                     <button
                       type="button"
                       disabled={busyId === o.id}
                       onClick={() => void submitOrder(o.id)}
                       className="rounded-lg bg-brand-800 px-3 py-2 text-sm font-medium text-white hover:bg-brand-900 disabled:opacity-50"
                     >
-                      Gửi bếp
+                      Xác nhận đơn
                     </button>
+                  ) : null}
+                  {hasRole("CUSTOMER") && showCancel ? (
                     <button
                       type="button"
                       disabled={busyId === o.id}
@@ -142,13 +185,54 @@ export default function OrdersPage() {
                     >
                       Hủy đơn
                     </button>
-                  </div>
-                ) : null}
+                  ) : null}
+                  {showCustomerPay || showStaffPay ? (
+                    <button
+                      type="button"
+                      onClick={() => setPayingOrder(o)}
+                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900 hover:bg-violet-100"
+                    >
+                      {showCustomerPay ? "Thanh toán VNPAY" : "Thanh toán"}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
+
+      <OrderDetailDialog
+        open={detailOrder != null}
+        order={detailOrder}
+        onClose={() => setDetailOrder(null)}
+        onEdit={
+          detailOrder && hasRole("CUSTOMER") && canCustomerEditOrder(detailOrder.orderStatus)
+            ? () => {
+                setDetailOrder(null);
+                setEditingOrder(detailOrder);
+              }
+            : undefined
+        }
+      />
+
+      <CustomerOrderEditDialog
+        open={editingOrder != null}
+        order={editingOrder}
+        onClose={() => setEditingOrder(null)}
+        onSaved={() => void load()}
+      />
+
+      {payingOrder != null ? (
+        <StaffPaymentCreateDialog
+          open
+          initialOrderNumber={payingOrder.orderNumber}
+          customerDeliveryOnly={hasRole("CUSTOMER") && payingOrder.orderType === "DELIVERY"}
+          onClose={() => setPayingOrder(null)}
+          onSaved={() => void load()}
+        />
+      ) : null}
     </div>
   );
 }

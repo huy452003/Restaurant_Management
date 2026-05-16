@@ -23,7 +23,7 @@ const nav: NavItem[] = [
     href: "/staff",
     label: "Quản lý",
     auth: true,
-    roles: ["ADMIN", "MANAGER", "CASHIER", "WAITER", "CHEF"],
+    roles: ["ADMIN", "MANAGER", "CASHIER", "CHEF"],
   },
 ];
 

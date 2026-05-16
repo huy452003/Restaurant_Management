@@ -10,7 +10,7 @@ import {
 } from "@/lib/shiftApiFormat";
 import type { PaginatedResponse, ShiftModel, UserModel, UserRole } from "@/lib/api/types";
 
-const ELIGIBLE_ROLES: UserRole[] = ["MANAGER", "WAITER", "CHEF", "CASHIER"];
+const ELIGIBLE_ROLES: UserRole[] = ["MANAGER", "CHEF", "CASHIER"];
 
 const SHIFT_STATUSES = ["SCHEDULED", "IN_PROGRESS", "COMPLETED", "CANCELLED"] as const;
 type ShiftStatusEdit = (typeof SHIFT_STATUSES)[number];

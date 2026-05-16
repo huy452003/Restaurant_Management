@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { TableNumberSelect } from "@/components/TableNumberSelect";
 import { useAuth } from "@/context/auth-context";
+import { useRestaurantTables } from "@/hooks/use-restaurant-tables";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
 import type { PaginatedResponse, ReservationModel } from "@/lib/api/types";
 import { formatLocalDateTimeDdMmYyyyHhMmSs } from "@/lib/dates";
@@ -16,7 +18,12 @@ export default function ReservationsPage() {
   const [loading, setLoading] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [tableNumber, setTableNumber] = useState(1);
+  const [tableNumber, setTableNumber] = useState<number | "">("");
+  const { tables, loading: tablesLoading, error: tablesError } = useRestaurantTables({
+    tableStatus: "AVAILABLE",
+    excludeTablesWithPendingOrder: true,
+    enabled: !!user && hasRole("CUSTOMER"),
+  });
   const [guests, setGuests] = useState(2);
   const [whenLocal, setWhenLocal] = useState(""); // datetime-local
   const [special, setSpecial] = useState("");
@@ -50,8 +57,19 @@ export default function ReservationsPage() {
     void Promise.resolve().then(() => load());
   }, [user, authLoading, hasRole, router, load]);
 
+  useEffect(() => {
+    if (tables.length === 0) return;
+    if (tableNumber === "" || !tables.some((t) => t.tableNumber === tableNumber)) {
+      setTableNumber(tables[0].tableNumber);
+    }
+  }, [tables, tableNumber]);
+
   async function createReservation(e: React.FormEvent) {
     e.preventDefault();
+    if (tableNumber === "") {
+      setFormError("Chọn bàn");
+      return;
+    }
     if (!whenLocal) {
       setFormError("Chọn ngày giờ");
       return;
@@ -125,16 +143,16 @@ export default function ReservationsPage() {
         {formError ? (
           <p className="sm:col-span-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{formError}</p>
         ) : null}
-        <div>
-          <label className="block text-sm font-medium text-stone-700">Số bàn mong muốn</label>
-          <input
-            type="number"
-            min={1}
-            value={tableNumber}
-            onChange={(e) => setTableNumber(Number(e.target.value) || 1)}
-            className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
-          />
-        </div>
+        <TableNumberSelect
+          id="reservation-table"
+          label="Số bàn mong muốn"
+          value={tableNumber}
+          onChange={setTableNumber}
+          tables={tables}
+          loading={tablesLoading}
+          error={tablesError}
+          emptyHint="Hiện không có bàn trống. Vui lòng chọn thời gian khác hoặc liên hệ nhà hàng."
+        />
         <div>
           <label className="block text-sm font-medium text-stone-700">Số khách</label>
           <input
@@ -168,7 +186,7 @@ export default function ReservationsPage() {
         <div className="sm:col-span-2">
           <button
             type="submit"
-            disabled={pending}
+            disabled={pending || tableNumber === "" || tables.length === 0}
             className="rounded-xl bg-brand-800 px-6 py-3 text-sm font-semibold text-white hover:bg-brand-900 disabled:opacity-50"
           >
             {pending ? "Đang gửi…" : "Gửi yêu cầu đặt bàn"}

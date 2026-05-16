@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
-import { StaffPaymentCreateDialog } from "@/components/staff/StaffPaymentCreateDialog";
 import { StaffPaymentEditDialog } from "@/components/staff/StaffPaymentEditDialog";
 import { useAuth } from "@/context/auth-context";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
@@ -31,7 +30,6 @@ export default function StaffPaymentsPage() {
   const { user, loading: authLoading, hasRole } = useAuth();
   const router = useRouter();
   const [rows, setRows] = useState<PaymentModel[]>([]);
-  const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<PaymentModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,21 +64,10 @@ export default function StaffPaymentsPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
       <StaffBackLink />
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-serif text-2xl font-semibold text-brand-900" style={{ fontFamily: "var(--font-cormorant), serif" }}>
-          Thanh toán
-        </h1>
-        <button
-          type="button"
-          onClick={() => {
-            setEditing(null);
-            setCreating(true);
-          }}
-          className="shrink-0 rounded-lg border border-brand-200 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-900 hover:bg-brand-100"
-        >
-          Thêm thanh toán
-        </button>
-      </div>
+      <h1 className="font-serif text-2xl font-semibold text-brand-900" style={{ fontFamily: "var(--font-cormorant), serif" }}>
+        Thanh toán
+      </h1>
+      <p className="mt-1 text-sm text-muted">Tạo thanh toán mới từ trang Đơn hàng.</p>
       {error ? <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p> : null}
       {loading ? (
         <p className="mt-8 text-muted">Đang tải…</p>
@@ -122,10 +109,7 @@ export default function StaffPaymentsPage() {
                       type="button"
                       disabled={terminal}
                       title={terminal ? "Thanh toán đã kết thúc" : undefined}
-                      onClick={() => {
-                        setCreating(false);
-                        setEditing(p);
-                      }}
+                      onClick={() => setEditing(p)}
                       className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Sửa
@@ -139,7 +123,6 @@ export default function StaffPaymentsPage() {
         </div>
       )}
 
-      <StaffPaymentCreateDialog open={creating} onClose={() => setCreating(false)} onSaved={() => void load()} />
       <StaffPaymentEditDialog
         open={editing != null}
         row={editing}

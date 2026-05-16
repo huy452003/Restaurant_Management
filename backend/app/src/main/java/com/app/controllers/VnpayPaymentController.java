@@ -47,7 +47,7 @@ public class VnpayPaymentController {
     }
 
     @PostMapping("/init")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
+    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN','CUSTOMER')")
     public ResponseEntity<Response<VnpayCheckoutResponse>> init(
         Locale locale,
         HttpServletRequest httpRequest,

@@ -90,7 +90,7 @@ public class PaymentController {
     }
     
     @PostMapping("")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
+    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN','CUSTOMER')")
     public ResponseEntity<Response<PaymentModel>> create(
         Locale locale,
         @RequestBody @Valid PaymentCreateRequestModel payment

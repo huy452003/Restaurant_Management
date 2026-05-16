@@ -900,7 +900,7 @@ public class UserServiceImp implements UserService {
         }
         if (role != null && (role.equals(UserRole.ADMIN) ||
             role.equals(UserRole.CUSTOMER) || role.equals(UserRole.MANAGER) ||
-            role.equals(UserRole.WAITER) || role.equals(UserRole.CHEF) ||
+            role.equals(UserRole.CHEF) ||
             role.equals(UserRole.CASHIER))) {
             conditions.add(FilterCondition.eq("role", role));
         }

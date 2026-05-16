@@ -2,20 +2,17 @@ export type UserRole =
   | "ADMIN"
   | "CUSTOMER"
   | "MANAGER"
-  | "WAITER"
   | "CHEF"
   | "CASHIER";
 
 export type Gender = "MALE" | "FEMALE";
 
-export type OrderType = "DINE_IN" | "TAKE_AWAY" | "DELIVERY";
+export type OrderType = "DINE_IN" | "DELIVERY";
 
 export type OrderStatus =
   | "PENDING"
   | "CONFIRMED"
   | "PREPARING"
-  | "READY"
-  | "SERVED"
   | "COMPLETED"
   | "CANCELLED";
 
@@ -89,7 +86,7 @@ export interface OrderModel {
   customerName?: string;
   customerPhone?: string;
   customerEmail?: string;
-  tableNumber: number;
+  tableNumber?: number | null;
   waiterId?: number;
   orderStatus: OrderStatus;
   orderType: OrderType;
@@ -97,6 +94,10 @@ export interface OrderModel {
   tax?: string;
   totalAmount?: string;
   totalOrderItem?: number;
+  /** Backend: còn có thể tạo thanh toán mới cho đơn này */
+  canAcceptPayment?: boolean;
+  /** Backend: trạng thái được phép chọn tiếp (pipeline + thanh toán). */
+  allowedOrderStatuses?: OrderStatus[];
   notes?: string;
   completedAt?: string;
   createdAt?: string;

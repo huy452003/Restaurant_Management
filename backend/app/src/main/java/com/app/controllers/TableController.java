@@ -66,13 +66,16 @@ public class TableController {
         @RequestParam(required = false) @Min(value = 1, message = "{validate.table.capacity.min}") Integer capacity,
         @RequestParam(required = false) TableStatus tableStatus,
         @RequestParam(required = false) String location,
+        @RequestParam(required = false, defaultValue = "false") boolean excludeTablesWithPendingOrder,
+        @RequestParam(required = false, defaultValue = "false") boolean freshSnapshot,
         @PageableDefault(size = 5, sort = "id") Pageable pageable
     ) {
         LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext); 
 
         Page<TableModel> tablePage = tableService.filters(
-            id, tableNumber, capacity, tableStatus, location, pageable
+            id, tableNumber, capacity, tableStatus, location, excludeTablesWithPendingOrder,
+            freshSnapshot, pageable
         );
         PaginatedResponse<TableModel> paginatedResponse = PaginatedResponse.of(tablePage);
         Response<PaginatedResponse<TableModel>> response = new Response<>(
@@ -131,71 +134,8 @@ public class TableController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-    @PatchMapping("/status/reserved/{tableId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'WAITER')")
-    public ResponseEntity<Response<TableModel>> markReserved(
-        Locale locale,
-        @PathVariable @NotNull @Min(1) Integer tableId
-    ) {
-        LogContext logContext = getLogContext("markReserved", Collections.singletonList(tableId));
-        log.logInfo("is running, preparing to call service ...!", logContext);
-
-        TableModel model = tableService.markReserved(tableId);
-        Response<TableModel> response = new Response<>(
-            200,
-            messageSource.getMessage("response.message.updateTablesSuccess", null, locale),
-            "tableModel",
-            null,
-            model
-        );
-        log.logInfo("completed, returning response ...!", logContext);
-        return ResponseEntity.status(response.statusCode()).body(response);
-    }
-
-    @PatchMapping("/status/occupied/{tableId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'WAITER')")
-    public ResponseEntity<Response<TableModel>> markOccupied(
-        Locale locale,
-        @PathVariable @NotNull @Min(1) Integer tableId
-    ) {
-        LogContext logContext = getLogContext("markOccupied", Collections.singletonList(tableId));
-        log.logInfo("is running, preparing to call service ...!", logContext);
-
-        TableModel model = tableService.markOccupied(tableId);
-        Response<TableModel> response = new Response<>(
-            200,
-            messageSource.getMessage("response.message.updateTablesSuccess", null, locale),
-            "tableModel",
-            null,
-            model
-        );
-        log.logInfo("completed, returning response ...!", logContext);
-        return ResponseEntity.status(response.statusCode()).body(response);
-    }
-
-    @PatchMapping("/status/cleaning/{tableId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'WAITER')")
-    public ResponseEntity<Response<TableModel>> markCleaning(
-        Locale locale,
-        @PathVariable @NotNull @Min(1) Integer tableId
-    ) {
-        LogContext logContext = getLogContext("markCleaning", Collections.singletonList(tableId));
-        log.logInfo("is running, preparing to call service ...!", logContext);
-
-        TableModel model = tableService.markCleaning(tableId);
-        Response<TableModel> response = new Response<>(
-            200,
-            messageSource.getMessage("response.message.updateTablesSuccess", null, locale),
-            "tableModel",
-            null,
-            model
-        );
-        log.logInfo("completed, returning response ...!", logContext);
-        return ResponseEntity.status(response.statusCode()).body(response);
-    }
-
     @PatchMapping("/status/available/{tableId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'WAITER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
     public ResponseEntity<Response<TableModel>> markAvailable(
         Locale locale,
         @PathVariable @NotNull @Min(1) Integer tableId

@@ -4,7 +4,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.EqualsAndHashCode;
 
-import com.common.enums.OrderItemStatus;
+import com.common.enums.OrderStatus;
 import com.common.models.BaseModel;
 
 import jakarta.persistence.EnumType;
@@ -27,5 +27,5 @@ public class OrderItemAdminUpdateModel extends BaseModel{
     private String specialInstructions;
     @NotNull(message = "validate.orderItem.orderItemStatus.required")
     @Enumerated(EnumType.STRING)
-    private OrderItemStatus orderItemStatus;
+    private OrderStatus orderItemStatus;
 }

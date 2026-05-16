@@ -13,7 +13,6 @@ const STATUS_LABEL: Record<string, string> = {
   AVAILABLE: "Trống",
   OCCUPIED: "Đang phục vụ",
   RESERVED: "Đã đặt",
-  CLEANING: "Đang dọn",
 };
 
 export default function StaffTablesPage() {

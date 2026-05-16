@@ -21,6 +21,7 @@ import org.springframework.util.StringUtils;
 import com.app.config.VnpayProperties;
 import com.app.services.PaymentService;
 import com.app.services.VnpayPaymentService;
+import com.app.utils.VnpayReturnHtmlUtils;
 import com.app.utils.VnpaySignatureUtils;
 import com.common.entities.OrderEntity;
 import com.common.entities.PaymentEntity;
@@ -61,6 +62,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     private static final String VNP_CURR_VND = "VND";
     private static final String VNP_LOCALE_VN = "vn";
     private static final String VNP_ORDER_TYPE_OTHER = "other";
+    private static final BigDecimal VNP_MIN_AMOUNT_VND = new BigDecimal("10000");
     private static final String ZONE_ID_VN = "Asia/Ho_Chi_Minh";
     private static final DateTimeFormatter VNP_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
@@ -83,14 +85,25 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
 
         OrderEntity order = resolveOrderFromOrderNumber(request.getOrderNumber(), logContext);
 
+        // Mỗi lần mở cổng VNPAY dùng payment + TxnRef mới (tránh trùng TxnRef đã gửi lên VNPAY).
+        paymentService.cancelPendingPaymentsForOrder(order.getId());
+
         PaymentCreateRequestModel createPayload = PaymentCreateRequestModel.builder()
             .orderNumber(order.getOrderNumber())
             .paymentMethod(PaymentMethod.VNPAY)
             .build();
-
         PaymentModel created = paymentService.create(createPayload);
-
         PaymentEntity payment = resolvePayment(created.getId(), logContext);
+
+        if (payment.getAmount() == null || payment.getAmount().compareTo(VNP_MIN_AMOUNT_VND) < 0) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "Order payment amount must be at least " + VNP_MIN_AMOUNT_VND + " VND for VNPAY",
+                Collections.singletonList(order.getId()),
+                "PaymentModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
 
         ZonedDateTime now = ZonedDateTime.now(java.time.ZoneId.of(ZONE_ID_VN));
         ZonedDateTime expire = now.plusMinutes(15);
@@ -116,7 +129,22 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
             vnpayProperties.getHashSecret()
         );
 
-        log.logInfo("VNPAY init ok, paymentId=" + payment.getId(), logContext);
+        log.logInfo(
+            "VNPAY init ok paymentId=" + payment.getId()
+                + " txnRef=" + payment.getId()
+                + " amountVnd=" + payment.getAmount()
+                + " wireAmount=" + toVnpAmountVnd(payment.getAmount())
+                + " ipAddr=" + vnp.get("vnp_IpAddr")
+                + " returnUrl=" + vnpayProperties.getReturnUrl()
+                + " signDataLen=" + VnpaySignatureUtils.buildSignData(vnp).length(),
+            logContext
+        );
+        if (vnpayProperties.getReturnUrl() != null && vnpayProperties.getReturnUrl().contains("localhost")) {
+            log.logWarn(
+                "vnpay.return-url uses localhost — khai báo đúng URL này trên Merchant Admin (Terminal PDUGJQUL) hoặc dùng ngrok HTTPS",
+                logContext
+            );
+        }
         return new VnpayCheckoutResponse(paymentUrl, toPaymentModel(payment));
     }
 
@@ -210,14 +238,14 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
 
         if (!VnpaySignatureUtils.verifySecureHash(params, vnpayProperties.getHashSecret())) {
             log.logWarn("VNPAY return invalid signature", logContext);
-            writeSimpleHtml(response, false, null, "Invalid signature");
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
             return;
         }
 
         String txnRef = params.get("vnp_TxnRef");
         String rsp = params.get("vnp_ResponseCode");
         if (!StringUtils.hasText(txnRef)) {
-            writeSimpleHtml(response, false, null, "Missing transaction reference");
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
             return;
         }
 
@@ -225,13 +253,13 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         try {
             paymentId = Integer.parseInt(txnRef.trim());
         } catch (NumberFormatException e) {
-            writeSimpleHtml(response, false, null, "Invalid transaction reference");
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
             return;
         }
 
         PaymentEntity payment = paymentRepository.findById(paymentId).orElse(null);
         if (payment == null || payment.getPaymentMethod() != PaymentMethod.VNPAY) {
-            writeSimpleHtml(response, false, paymentId, "Payment not found");
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
             return;
         }
 
@@ -241,11 +269,11 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
                 long wire = Long.parseLong(vnpAmountStr.trim());
                 long ex = payment.getAmount().setScale(2, RoundingMode.HALF_UP).movePointRight(2).longValueExact();
                 if (wire != ex) {
-                    writeSimpleHtml(response, false, paymentId, "Amount mismatch");
+                    VnpayReturnHtmlUtils.write(response, false, payment, params, resolvePostPaymentHomeUrl());
                     return;
                 }
             } catch (NumberFormatException ignored) {
-                writeSimpleHtml(response, false, paymentId, "Invalid amount");
+                VnpayReturnHtmlUtils.write(response, false, payment, params, resolvePostPaymentHomeUrl());
                 return;
             }
         }
@@ -271,7 +299,15 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
             return;
         }
 
-        writeSimpleHtml(response, ok, paymentId, ok ? "Payment successful" : ("Failed, error: " + (rsp != null ? rsp : "unknown")));
+        VnpayReturnHtmlUtils.write(response, ok, payment, params, resolvePostPaymentHomeUrl());
+    }
+
+    private String resolvePostPaymentHomeUrl() {
+        String base = vnpayProperties.getFrontendRedirectBase();
+        if (StringUtils.hasText(base)) {
+            return base.replaceAll("/$", "") + "/staff/payments";
+        }
+        return "http://localhost:3000/staff/payments";
     }
 
     // private method
@@ -312,12 +348,22 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     }
 
     private static String buildOrderInfoLabel(PaymentEntity entity) {
-        // Nội dung hiển thị trên trang VNPAY (giới hạn 255 ký tự).
+        // VNPAY: tiếng Việt không dấu, không ký tự đặc biệt (Alphanumeric + khoảng trắng).
         Integer orderId = entity.getOrderId() != null ? entity.getOrderId() : (entity.getOrder() != null ? entity.getOrder().getId() : null);
-        if (orderId != null) {
-            return "Thanh toan don hang #" + orderId + ", ma giao dich " + entity.getId();
+        String raw = orderId != null
+            ? "Thanh toan don hang " + orderId + " ma GD " + entity.getId()
+            : "Thanh toan ma GD " + entity.getId();
+        return sanitizeVnpOrderInfo(raw);
+    }
+
+    private static String sanitizeVnpOrderInfo(String raw) {
+        if (raw == null) {
+            return "Thanh toan";
         }
-        return "Thanh toan ma giao dich " + entity.getId();
+        String normalized = java.text.Normalizer.normalize(raw, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");
+        String cleaned = normalized.replaceAll("[^a-zA-Z0-9 ]", " ").replaceAll("\\s+", " ").trim();
+        return cleaned.isEmpty() ? "Thanh toan" : cleaned;
     }
 
     private static String truncate(String s, int max) {
@@ -364,41 +410,31 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         }
     }
 
-    private void writeSimpleHtml(HttpServletResponse response, boolean success, Integer paymentId, String message)
-        throws IOException {
-        // Trang tối giản khi chưa cấu hình frontend redirect sau return.
-        response.setCharacterEncoding("UTF-8");
-        response.setContentType("text/html;charset=UTF-8");
-        String pid = paymentId != null ? String.valueOf(paymentId) : "-";
-        String body = String.format(
-            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>VNPAY</title></head><body>"
-                + "<h2>%s</h2><p>Ma thanh toan (payment id): %s</p><p>%s</p></body></html>",
-            success ? "Thanh cong" : "Thong bao",
-            pid,
-            message != null ? escapeHtml(message) : ""
-        );
-        response.getWriter().write(body);
-    }
-
-    private static String escapeHtml(String s) {
-        // Tránh XSS nhẹ khi hiển thị thông báo HTML tĩnh.
-        if (s == null) {
-            return "";
-        }
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-    }
-
     private static String resolveClientIp(HttpServletRequest request) {
         // vnp_IpAddr: ưu tiên X-Forwarded-For khi app sau reverse proxy.
         String xff = request.getHeader("X-Forwarded-For");
         if (StringUtils.hasText(xff)) {
-            return xff.split(",")[0].trim();
+            String ip = xff.split(",")[0].trim();
+            if (isUsableVnpIp(ip)) {
+                return ip;
+            }
         }
-        String a = request.getRemoteAddr();
-        if ("0:0:0:0:0:0:0:1".equals(a)) {
-            return "127.0.0.1";
+        String remote = request.getRemoteAddr();
+        if (isUsableVnpIp(remote)) {
+            return remote;
         }
-        return a;
+        // Sandbox thường từ chối 127.0.0.1 / ::1 — dùng IP public mẫu trong tài liệu VNPAY.
+        return "113.160.227.3";
+    }
+
+    private static boolean isUsableVnpIp(String ip) {
+        if (!StringUtils.hasText(ip)) {
+            return false;
+        }
+        String normalized = ip.trim();
+        return !"127.0.0.1".equals(normalized)
+            && !"0:0:0:0:0:0:0:1".equals(normalized)
+            && !"localhost".equalsIgnoreCase(normalized);
     }
 
     private static ResponseEntity<String> bodyJson(String rspCode, String message) {

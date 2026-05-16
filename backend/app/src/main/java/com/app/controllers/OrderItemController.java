@@ -19,7 +19,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 
 import com.app.services.OrderItemService;
-import com.common.enums.OrderItemStatus;
+import com.common.enums.OrderStatus;
 import com.common.models.PaginatedResponse;
 import com.common.models.orderItem.OrderItemAdminUpdateModel;
 import com.common.models.orderItem.OrderItemCreateModel;
@@ -63,7 +63,7 @@ public class OrderItemController {
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
         @RequestParam(required = false) String orderNumber,
-        @RequestParam(required = false) OrderItemStatus orderItemStatus,
+        @RequestParam(required = false) OrderStatus orderItemStatus,
         @PageableDefault(size = 5, sort = "id") Pageable pageable
     ) {
         LogContext logContext = getLogContext("filters", Collections.emptyList());

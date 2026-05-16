@@ -85,7 +85,6 @@ public class ShiftServiceImp implements ShiftService {
             "ShiftModel", logContext, log
         );
         if (
-            currentUser.getRole() == UserRole.WAITER || 
             currentUser.getRole() == UserRole.CHEF || 
             currentUser.getRole() == UserRole.CASHIER
         ) {
@@ -290,7 +289,6 @@ public class ShiftServiceImp implements ShiftService {
                 shift.getEmployeeId(), "UserModel", logContext, log
             );
             if(!Objects.equals(employee.getRole(), UserRole.MANAGER) &&
-               !Objects.equals(employee.getRole(), UserRole.WAITER) &&
                !Objects.equals(employee.getRole(), UserRole.CHEF) &&
                !Objects.equals(employee.getRole(), UserRole.CASHIER)
             ) {
@@ -298,7 +296,7 @@ public class ShiftServiceImp implements ShiftService {
                 invalidField.put("employeeId", shift.getEmployeeId());
                 invalidField.put("field", "role");
                 invalidField.put("value", employee.getRole());
-                invalidField.put("message", "Employee role must be MANAGER, WAITER, CHEF or CASHIER");
+                invalidField.put("message", "Employee role must be MANAGER, CHEF or CASHIER");
                 invalidFields.add(invalidField);
             }
             invalidFields.addAll(validateShiftTimeFields(shift));

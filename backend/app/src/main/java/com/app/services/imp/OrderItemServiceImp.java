@@ -5,11 +5,14 @@ import org.springframework.stereotype.Service;
 
 import com.app.services.OrderItemService;
 import com.app.services.PaymentService;
+import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.repositories.MenuItemRepository;
 import com.common.repositories.OrderItemRepository;
 import com.common.repositories.OrderRepository;
+import com.common.repositories.PaymentRepository;
+import com.common.enums.PaymentStatus;
 import com.common.specifications.FilterCondition;
 import com.common.specifications.SpecificationHelper;
 import com.common.utils.FilterPageCacheFacade;
@@ -22,7 +25,6 @@ import com.common.entities.OrderEntity;
 import com.common.entities.OrderItemEntity;
 import com.common.entities.UserEntity;
 import com.common.enums.MenuItemStatus;
-import com.common.enums.OrderItemStatus;
 import com.common.enums.OrderStatus;
 import com.common.enums.UserRole;
 
@@ -48,8 +50,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Objects;
+import java.util.Set;
 
 import org.modelmapper.ModelMapper;
 
@@ -73,6 +78,10 @@ public class OrderItemServiceImp implements OrderItemService {
     private ModelMapper modelMapper;
     @Autowired
     private PaymentService paymentService;
+    @Autowired
+    private PaymentRepository paymentRepository;
+    @Autowired
+    private TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> orderItemIds) {
         return LogContext.builder()
@@ -89,7 +98,7 @@ public class OrderItemServiceImp implements OrderItemService {
 
     @Override
     public Page<OrderItemModel> filters(
-        Integer id, String orderNumber, OrderItemStatus orderItemStatus, Pageable pageable
+        Integer id, String orderNumber, OrderStatus orderItemStatus, Pageable pageable
     ) {
         LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("Filtering order items with pagination ...!", logContext);
@@ -174,34 +183,82 @@ public class OrderItemServiceImp implements OrderItemService {
             assertCanMutateOrderItems(order, currentUser, logContext);
         }
 
-        List<OrderItemEntity> orderItemEntities = new ArrayList<>();
-        for(OrderItemCreateModel orderItemModel : orderItems) {
+        List<Integer> orderIds = ordersByNumber.values().stream()
+            .map(OrderEntity::getId)
+            .distinct()
+            .collect(Collectors.toList());
+
+        Map<String, OrderItemEntity> activeLinesByMergeKey = new HashMap<>();
+        for (OrderItemEntity existing : orderItemRepository.findByOrder_IdIn(orderIds)) {
+            if (existing.getOrderItemStatus() == OrderStatus.CANCELLED) {
+                continue;
+            }
+            if (existing.getOrder() == null || existing.getMenuItem() == null) {
+                continue;
+            }
+            activeLinesByMergeKey.putIfAbsent(
+                mergeKeyForOrderLine(
+                    existing.getOrder().getId(),
+                    existing.getMenuItem().getId(),
+                    existing.getSpecialInstructions()
+                ),
+                existing
+            );
+        }
+
+        List<OrderItemEntity> toInsert = new ArrayList<>();
+        List<OrderItemEntity> touched = new ArrayList<>();
+        for (OrderItemCreateModel orderItemModel : orderItems) {
             OrderEntity order = ordersByNumber.get(orderItemModel.getOrderNumber());
             MenuItemEntity menuItem = menuItemsByName.get(orderItemModel.getMenuItemName());
+            String mergeKey = mergeKeyForOrderLine(
+                order.getId(),
+                menuItem.getId(),
+                orderItemModel.getSpecialInstructions()
+            );
+
+            OrderItemEntity existing = activeLinesByMergeKey.get(mergeKey);
+            if (existing != null) {
+                existing.setQuantity(existing.getQuantity() + orderItemModel.getQuantity());
+                applyPricingFromMenu(existing, menuItem);
+                if (!touched.contains(existing)) {
+                    touched.add(existing);
+                }
+                continue;
+            }
+
             OrderItemEntity entity = modelMapper.map(orderItemModel, OrderItemEntity.class);
             entity.setOrder(order);
             entity.setMenuItem(menuItem);
-            entity.setOrderItemStatus(OrderItemStatus.PENDING);
+            entity.setOrderItemStatus(OrderStatus.PENDING);
             applyPricingFromMenu(entity, menuItem);
-            orderItemEntities.add(entity);
+            toInsert.add(entity);
+            activeLinesByMergeKey.put(mergeKey, entity);
+            touched.add(entity);
         }
 
-        orderItemRepository.saveAll(orderItemEntities);
+        if (!toInsert.isEmpty()) {
+            orderItemRepository.saveAll(toInsert);
+        }
+        List<OrderItemEntity> updated = touched.stream()
+            .filter(line -> line.getId() != null)
+            .collect(Collectors.toList());
+        if (!updated.isEmpty()) {
+            orderItemRepository.saveAll(updated);
+        }
 
-        recalculateOrderAmounts(orderItemEntities.stream()
-            .map(orderItem -> orderItem.getOrder().getId())
-            .distinct()
-            .collect(Collectors.toList())
-        );
+        recalculateOrderAmounts(orderIds);
 
         clearOrderCaches(logContext);
 
         log.logInfo("Deleted filter caches after create", logContext);
 
-        log.logInfo("completed, created " + orderItemEntities.size() + " order items", logContext);
-        return orderItemEntities.stream().map(
-            this::toOrderItemModel
-        ).collect(Collectors.toList());
+        log.logInfo(
+            "completed, " + toInsert.size() + " new line(s), "
+                + (touched.size() - toInsert.size()) + " merged into existing line(s)",
+            logContext
+        );
+        return touched.stream().map(this::toOrderItemModel).collect(Collectors.toList());
     }
 
     @Override
@@ -392,6 +449,7 @@ public class OrderItemServiceImp implements OrderItemService {
         List<OrderEntity> orders = orderRepository.findAllById(orderIds);
         Map<Integer, List<OrderItemEntity>> itemsByOrderId = orderItemRepository.findByOrder_IdIn(orderIds).stream()
             .collect(Collectors.groupingBy(item -> item.getOrder().getId()));
+        Set<Integer> tablesToRecheck = new HashSet<>();
 
         for(OrderEntity order : orders) {
             List<OrderItemEntity> orderItems = itemsByOrderId.getOrDefault(order.getId(), Collections.emptyList());
@@ -406,43 +464,65 @@ public class OrderItemServiceImp implements OrderItemService {
             order.setTax(tax);
             order.setTotalAmount(totalAmount);
 
-            List<OrderItemStatus> itemStatuses = orderItems.stream()
+            List<OrderStatus> itemStatuses = orderItems.stream()
                 .map(OrderItemEntity::getOrderItemStatus)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
             if(itemStatuses.isEmpty()) {
                 continue;
             }
-            OrderStatus targetStatus = determineOrderStatus(itemStatuses);
+            OrderStatus targetStatus = determineOrderStatusFromItems(itemStatuses);
             OrderStatus previousOrderStatus = order.getOrderStatus();
-            OrderStatusTransitionUtils.applyOrderStatusTransition(order, targetStatus);
+            boolean paid = paymentRepository.existsByOrderIdAndPaymentStatus(
+                order.getId(), PaymentStatus.COMPLETED
+            );
+            if (!OrderStatusTransitionUtils.isAllowedTransition(
+                previousOrderStatus, targetStatus, paid
+            )) {
+                continue;
+            }
+            OrderStatusTransitionUtils.applyOrderStatusTransition(order, targetStatus, paid);
             if (targetStatus == OrderStatus.CANCELLED && previousOrderStatus != OrderStatus.CANCELLED) {
                 paymentService.cancelPendingPaymentsForOrder(order.getId());
             }
+            boolean becameTerminal = (targetStatus == OrderStatus.CANCELLED || targetStatus == OrderStatus.COMPLETED)
+                && previousOrderStatus != targetStatus;
+            if (becameTerminal && order.getTable() != null) {
+                tablesToRecheck.add(order.getTable().getTableNumber());
+            }
         }
         orderRepository.saveAll(orders);
+        tablesToRecheck.forEach(tableStatusSyncService::syncTableStatus);
     }
 
-    private OrderStatus determineOrderStatus(List<OrderItemStatus> itemStatuses) {
-        if(itemStatuses.stream().allMatch(status -> status == OrderItemStatus.CANCELLED)) {
+    private OrderStatus determineOrderStatusFromItems(List<OrderStatus> itemStatuses) {
+        if(itemStatuses.stream().allMatch(status -> status == OrderStatus.CANCELLED)) {
             return OrderStatus.CANCELLED;
         }
-        if(itemStatuses.stream().allMatch(status -> status == OrderItemStatus.COMPLETED)) {
+        if(itemStatuses.stream().allMatch(status -> status == OrderStatus.COMPLETED)) {
             return OrderStatus.COMPLETED;
         }
-        if(itemStatuses.stream().anyMatch(status -> status == OrderItemStatus.SERVED)) {
-            return OrderStatus.SERVED;
-        }
-        if(itemStatuses.stream().anyMatch(status -> status == OrderItemStatus.READY)) {
-            return OrderStatus.READY;
-        }
-        if(itemStatuses.stream().anyMatch(status -> status == OrderItemStatus.PREPARING)) {
+        if(itemStatuses.stream().anyMatch(status -> status == OrderStatus.PREPARING)) {
             return OrderStatus.PREPARING;
         }
-        if(itemStatuses.stream().anyMatch(status -> status == OrderItemStatus.CONFIRMED)) {
+        if(itemStatuses.stream().anyMatch(status -> status == OrderStatus.CONFIRMED)) {
             return OrderStatus.CONFIRMED;
         }
         return OrderStatus.PENDING;
+    }
+
+    /** Gộp dòng cùng đơn + cùng món + cùng ghi chú bếp (specialInstructions). */
+    private static String mergeKeyForOrderLine(
+        Integer orderId, Integer menuItemId, String specialInstructions
+    ) {
+        return orderId + ":" + menuItemId + ":" + normalizeSpecialInstructions(specialInstructions);
+    }
+
+    private static String normalizeSpecialInstructions(String specialInstructions) {
+        if (!StringUtils.hasText(specialInstructions)) {
+            return "";
+        }
+        return specialInstructions.trim();
     }
 
     private void applyPricingFromMenu(OrderItemEntity orderItem, MenuItemEntity menuItem) {
@@ -489,7 +569,7 @@ public class OrderItemServiceImp implements OrderItemService {
     }
 
     private List<FilterCondition<OrderItemEntity>> buildFilterConditions(
-        Integer id, String orderNumber, OrderItemStatus orderItemStatus
+        Integer id, String orderNumber, OrderStatus orderItemStatus
     ) {
         List<FilterCondition<OrderItemEntity>> conditions = new ArrayList<>();
         if(id != null && id > 0) {

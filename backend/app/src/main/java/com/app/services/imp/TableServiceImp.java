@@ -4,7 +4,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.app.services.TableStatusSyncService;
 import com.app.services.TableService;
+import com.app.utils.OrderTableHoldUtils;
+import com.common.enums.OrderStatus;
+import com.common.repositories.OrderRepository;
 import com.common.repositories.TableRepository;
 import com.common.specifications.FilterCondition;
 import com.common.specifications.SpecificationHelper;
@@ -27,8 +31,10 @@ import com.handle_exceptions.ValidationExceptionHandle;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,6 +49,8 @@ public class TableServiceImp implements TableService {
     @Autowired
     private TableRepository tableRepository;
     @Autowired
+    private OrderRepository orderRepository;
+    @Autowired
     private RedisTemplate<String, Object> redisTemplate;
     @Autowired
     private ObjectMapper objectMapper;
@@ -50,6 +58,8 @@ public class TableServiceImp implements TableService {
     private LoggingService log;
     @Autowired
     private ModelMapper modelMapper;
+    @Autowired
+    private TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> tableIds) {
         return LogContext.builder()
@@ -64,8 +74,10 @@ public class TableServiceImp implements TableService {
 
     @Override
     public Page<TableModel> filters(
-        Integer id, Integer tableNumber, Integer capacity, 
-        TableStatus tableStatus, String location, Pageable pageable
+        Integer id, Integer tableNumber, Integer capacity,
+        TableStatus tableStatus, String location, boolean excludeTablesWithPendingOrder,
+        boolean freshSnapshot,
+        Pageable pageable
     ) {
         LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("Filtering tables with pagination ...!", logContext);
@@ -77,14 +89,20 @@ public class TableServiceImp implements TableService {
         String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
             TABLE_REDIS_KEY_PREFIX, conditions, pageable
         );
+        if (excludeTablesWithPendingOrder && redisKeyFilters != null) {
+            redisKeyFilters = redisKeyFilters + ":excludePendingOrder";
+        }
 
-        Page<TableModel> cached = FilterPageCacheFacade.readFirstPageCache(
-            redisTemplate, redisKeyFilters, pageable, objectMapper, TableModel.class
-        );
-
-        if(cached != null && !cached.isEmpty()) {
-            log.logInfo("found " + cached.getTotalElements() + " tables in cache", logContext);
-            return cached;
+        if (!freshSnapshot) {
+            Page<TableModel> cached = FilterPageCacheFacade.readFirstPageCache(
+                redisTemplate, redisKeyFilters, pageable, objectMapper, TableModel.class
+            );
+            if (cached != null && !cached.isEmpty()) {
+                log.logInfo("found " + cached.getTotalElements() + " tables in cache", logContext);
+                return excludeTablesWithPendingOrder
+                    ? excludeTablesWithPendingOrders(cached)
+                    : cached;
+            }
         }
 
         Page<TableEntity> pageEntities;
@@ -103,8 +121,11 @@ public class TableServiceImp implements TableService {
         Page<TableModel> tableModelPage = new PageImpl<>(
             pageDatas, pageEntities.getPageable(), pageEntities.getTotalElements()
         );
+        if (excludeTablesWithPendingOrder) {
+            tableModelPage = excludeTablesWithPendingOrders(tableModelPage);
+        }
 
-        if(redisKeyFilters != null) {
+        if (!freshSnapshot && redisKeyFilters != null) {
             FilterPageCacheFacade.writeFirstPageCache(redisTemplate, redisKeyFilters, tableModelPage);
             log.logInfo("cached first-page filter snapshot for " + tableModelPage.getTotalElements()
                 + " tables, key: " + redisKeyFilters, logContext);
@@ -245,79 +266,40 @@ public class TableServiceImp implements TableService {
         ).collect(Collectors.toList());
     }
 
-    // đánh dấu bàn có sẵn
     @Override
     public TableModel markAvailable(Integer tableId) {
         LogContext logContext = getLogContext("markAvailable", Collections.singletonList(tableId));
         log.logInfo("Marking table as AVAILABLE ...!", logContext);
 
         TableEntity table = getTable(tableId, logContext);
-        transitionStatus(table.getTableStatus(), TableStatus.CLEANING,
-            "Only CLEANING tables can be marked AVAILABLE", tableId
+        transitionStatus(table.getTableStatus(), TableStatus.OCCUPIED,
+            "Only OCCUPIED tables can be marked AVAILABLE", tableId
         );
 
-        table.setTableStatus(TableStatus.AVAILABLE);
-        tableRepository.save(table);
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
-        return modelMapper.map(table, TableModel.class);
-    }
-
-    // đánh dấu bàn đã đặt trước
-    @Override
-    public TableModel markReserved(Integer tableId) {
-        LogContext logContext = getLogContext("markReserved", Collections.singletonList(tableId));
-        log.logInfo("Marking table as RESERVED ...!", logContext);
-
-        TableEntity table = getTable(tableId, logContext);
-        transitionStatus(table.getTableStatus(), TableStatus.AVAILABLE,
-            "Only AVAILABLE tables can be marked RESERVED", tableId
-        );
-
-        table.setTableStatus(TableStatus.RESERVED);
-        tableRepository.save(table);
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
-        return modelMapper.map(table, TableModel.class);
-    }
-
-    // đánh dấu bàn đã có người
-    @Override
-    public TableModel markOccupied(Integer tableId) {
-        LogContext logContext = getLogContext("markOccupied", Collections.singletonList(tableId));
-        log.logInfo("Marking table as OCCUPIED ...!", logContext);
-
-        TableEntity table = getTable(tableId, logContext);
-        TableStatus s = table.getTableStatus();
-        if (s != TableStatus.AVAILABLE && s != TableStatus.RESERVED) {
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Only AVAILABLE or RESERVED tables can be marked OCCUPIED",
-                "TableModel",
-                "table must be AVAILABLE or RESERVED"
+        tableStatusSyncService.syncTableStatus(table.getTableNumber());
+        TableEntity refreshed = getTable(tableId, logContext);
+        if (refreshed.getTableStatus() != TableStatus.AVAILABLE) {
+            ConflictExceptionHandle e = new ConflictExceptionHandle(
+                "Table still has active orders; complete or cancel them first",
+                Collections.singletonList(tableId),
+                "TableModel"
             );
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
-
-        table.setTableStatus(TableStatus.OCCUPIED);
-        tableRepository.save(table);
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
-        return modelMapper.map(table, TableModel.class);
+        return modelMapper.map(refreshed, TableModel.class);
     }
 
-    // đánh dấu bàn đang dọn dẹp
-    @Override
-    public TableModel markCleaning(Integer tableId) {
-        LogContext logContext = getLogContext("markCleaning", Collections.singletonList(tableId));
-        log.logInfo("Marking table as CLEANING ...!", logContext);
-
-        TableEntity table = getTable(tableId, logContext);
-        transitionStatus(table.getTableStatus(), TableStatus.OCCUPIED,
-            "Only OCCUPIED tables can be marked CLEANING", tableId
+    private Page<TableModel> excludeTablesWithPendingOrders(Page<TableModel> page) {
+        Set<Integer> blockedTableNumbers = new HashSet<>(
+            orderRepository.findDistinctTableNumbersByOrderStatusIn(
+                OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES
+            )
         );
-
-        table.setTableStatus(TableStatus.CLEANING);
-        tableRepository.save(table);
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
-        return modelMapper.map(table, TableModel.class);
+        List<TableModel> content = page.getContent().stream()
+            .filter(t -> !blockedTableNumbers.contains(t.getTableNumber()))
+            .collect(Collectors.toList());
+        return new PageImpl<>(content, page.getPageable(), content.size());
     }
 
     // private method

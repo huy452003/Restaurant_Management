@@ -96,7 +96,7 @@ public class OrderController {
     }
 
     @GetMapping("/filters/admin")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
     public ResponseEntity<Response<PaginatedResponse<OrderModel>>> filtersForAdmin(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -178,7 +178,7 @@ public class OrderController {
     }
 
     @PutMapping("/admin")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
     public ResponseEntity<Response<List<OrderModel>>> updateByAdmin(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<OrderAdminRequestModel> request

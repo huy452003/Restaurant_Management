@@ -11,13 +11,14 @@ import com.common.models.table.TableRequestModel;
 
 public interface TableService {
     Page<TableModel> filters(
-        Integer id, Integer tableNumber, Integer capacity, 
-        TableStatus tableStatus, String location, Pageable pageable
+        Integer id, Integer tableNumber, Integer capacity,
+        TableStatus tableStatus, String location, boolean excludeTablesWithPendingOrder,
+        boolean freshSnapshot,
+        Pageable pageable
     );
     List<TableModel> create(List<TableRequestModel> tables);
     List<TableModel> update(List<TableRequestModel> updates, List<Integer> tableIds);
-    TableModel markReserved(Integer tableId);
-    TableModel markOccupied(Integer tableId);
-    TableModel markCleaning(Integer tableId);
+
+    /** Trả bàn theo đơn/reservation thực tế; báo lỗi nếu vẫn còn đơn giữ bàn. */
     TableModel markAvailable(Integer tableId);
 }

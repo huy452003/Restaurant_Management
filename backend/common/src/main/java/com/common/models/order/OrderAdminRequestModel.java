@@ -30,12 +30,8 @@ public class OrderAdminRequestModel {
     @NotBlank(message = "validate.reservation.customerEmail.required")
     @Email(message = "validate.reservation.customerEmail.invalidFormat")
     private String customerEmail;
-    @NotNull(message = "validate.order.tableNumber.required")
     @Min(value = 1, message = "validate.order.tableNumber.min")
     private Integer tableNumber;
-    @NotNull(message = "validate.order.waiterId.required")
-    @Min(value = 1, message = "validate.order.waiterId.min")
-    private Integer waiterId;
     @NotNull(message = "validate.order.orderStatus.required")
     @Enumerated(EnumType.STRING)
     private OrderStatus orderStatus;

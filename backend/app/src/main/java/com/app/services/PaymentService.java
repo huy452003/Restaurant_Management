@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import com.common.entities.OrderEntity;
 import com.common.enums.PaymentMethod;
 import com.common.enums.PaymentStatus;
 import com.common.models.payment.PaymentCreateRequestModel;
@@ -22,6 +23,8 @@ public interface PaymentService {
     PaymentModel cancel(Integer paymentId);
 
     void cancelPendingPaymentsForOrder(Integer orderId);
+
+    boolean canAcceptNewPayment(OrderEntity order, int orderItemCount, BigDecimal allocatedAmount);
 
     // Đánh dấu PENDING thành FAILED khi cổng VNPAY báo không thành công (IPN/return)
     // không dùng cho hủy thủ công.

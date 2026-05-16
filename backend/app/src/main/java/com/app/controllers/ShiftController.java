@@ -56,7 +56,7 @@ public class ShiftController {
     }
 
     @GetMapping("/filters")
-    @PreAuthorize("hasAnyRole('MANAGER','ADMIN','WAITER','CHEF','CASHIER')")
+    @PreAuthorize("hasAnyRole('MANAGER','ADMIN','CHEF','CASHIER')")
     public ResponseEntity<Response<PaginatedResponse<ShiftModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,

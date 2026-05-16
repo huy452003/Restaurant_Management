@@ -65,7 +65,7 @@ public final class VnpaySignatureUtils {
             if (i > 0) {
                 hashData.append('&');
             }
-            hashData.append(k).append('=').append(URLEncoder.encode(v, StandardCharsets.UTF_8));
+            hashData.append(k).append('=').append(encodeVnpValue(v));
         }
         return hashData.toString();
     }
@@ -111,34 +111,60 @@ public final class VnpaySignatureUtils {
     }
 
     /**
-     * Ghép query string UTF-8 (dùng sau khi đã có đủ tham số kể cả {@code vnp_SecureHash}).
+     * Ghép query string (dùng cho IPN/return echo).
      */
     public static String toUrlQuery(TreeMap<String, String> sortedParams) {
-        // Encode application/x-www-form-urlencoded cho redirect URL.
         StringBuilder b = new StringBuilder();
         for (Map.Entry<String, String> e : sortedParams.entrySet()) {
             if (b.length() > 0) {
                 b.append('&');
             }
-            b.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8));
+            b.append(encodeVnpValue(e.getKey()));
             b.append('=');
-            b.append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+            b.append(encodeVnpValue(e.getValue()));
         }
         return b.toString();
     }
 
     /**
-     * Gắn {@code vnp_SecureHash} rồi trả URL redirect đầy đủ tới cổng thanh toán VNPAY.
+     * Ghép URL redirect — khớp servlet mẫu VNPAY (pay.html): hashData chỉ encode value;
+     * query encode cả key/value; {@code vnp_SecureHash} nối thô ở cuối (không encode).
      */
     public static String buildPaymentRedirectUrl(String basePaymentUrl, TreeMap<String, String> vnpParamsNoHash, String hashSecret) {
-        // Thêm vnp_SecureHash rồi ghép URL đầy đủ tới sandbox/production pay.
         if (basePaymentUrl.contains("?")) {
             throw new IllegalArgumentException("vnpay.payment-url must be base URL without query string");
         }
-        String signData = buildSignData(vnpParamsNoHash);
+        List<String> fieldNames = new ArrayList<>();
+        for (String key : vnpParamsNoHash.keySet()) {
+            if (key != null && key.startsWith("vnp_") && StringUtils.hasText(vnpParamsNoHash.get(key))) {
+                fieldNames.add(key);
+            }
+        }
+        Collections.sort(fieldNames);
+
+        StringBuilder hashData = new StringBuilder();
+        StringBuilder query = new StringBuilder();
+        for (int i = 0; i < fieldNames.size(); i++) {
+            String fieldName = fieldNames.get(i);
+            String fieldValue = vnpParamsNoHash.get(fieldName);
+            if (i > 0) {
+                hashData.append('&');
+                query.append('&');
+            }
+            hashData.append(fieldName).append('=').append(encodeVnpValue(fieldValue));
+            query.append(encodeVnpValue(fieldName)).append('=').append(encodeVnpValue(fieldValue));
+        }
+
+        String signData = hashData.toString();
         String secureHash = hmacSha512Hex(hashSecret, signData);
-        TreeMap<String, String> all = new TreeMap<>(vnpParamsNoHash);
-        all.put("vnp_SecureHash", secureHash);
-        return basePaymentUrl + "?" + toUrlQuery(all);
+        String queryUrl = query + "&vnp_SecureHash=" + secureHash;
+        return basePaymentUrl + "?" + queryUrl;
+    }
+
+    /**
+     * Khớp servlet mẫu VNPAY (pay.html): {@link StandardCharsets#US_ASCII}, giữ {@code +} cho khoảng trắng.
+     */
+    private static String encodeVnpValue(String value) {
+        return URLEncoder.encode(value, StandardCharsets.US_ASCII);
     }
 }

@@ -15,7 +15,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderCustomerRequestModel {
-    @NotNull(message = "validate.order.tableNumber.required")
     @Min(value = 1, message = "validate.order.tableNumber.min")
     private Integer tableNumber;
     @NotNull(message = "validate.order.orderType.required")

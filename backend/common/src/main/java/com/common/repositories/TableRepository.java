@@ -8,6 +8,7 @@ import jakarta.persistence.LockModeType;
 
 import com.common.entities.TableEntity;
 import com.common.enums.TableStatus;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -18,4 +19,6 @@ public interface TableRepository extends JpaRepository<TableEntity, Integer>, Jp
     Optional<TableEntity> findByTableNumberAndTableStatus(Integer tableNumber, TableStatus tableStatus);
 
     boolean existsByTableNumber(Integer tableNumber);
+
+    List<TableEntity> findByTableStatus(TableStatus tableStatus);
 }

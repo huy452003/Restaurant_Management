@@ -3,9 +3,14 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api/client";
 import type { PaymentModel, VnpayCheckoutResponse } from "@/lib/api/types";
+import { openUrlInNewTab } from "@/lib/payments/open-url-in-new-tab";
 
 type Props = {
   open: boolean;
+  /** Mở từ dòng đơn: khóa mã đơn, ẩn ô nhập */
+  initialOrderNumber?: string;
+  /** Khách giao hàng: chỉ VNPAY (backend từ chối CASH). */
+  customerDeliveryOnly?: boolean;
   onClose: () => void;
   onSaved: () => void;
 };
@@ -16,7 +21,14 @@ const fieldClass =
 const btnPrimary =
   "inline-flex min-h-[42px] flex-1 items-center justify-center rounded-lg border px-4 py-2.5 text-sm font-semibold transition disabled:opacity-50 sm:min-h-0";
 
-export function StaffPaymentCreateDialog({ open, onClose, onSaved }: Props) {
+export function StaffPaymentCreateDialog({
+  open,
+  initialOrderNumber,
+  customerDeliveryOnly = false,
+  onClose,
+  onSaved,
+}: Props) {
+  const lockOrderNumber = Boolean(initialOrderNumber?.trim());
   const [orderNumber, setOrderNumber] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingCash, setPendingCash] = useState(false);
@@ -25,10 +37,10 @@ export function StaffPaymentCreateDialog({ open, onClose, onSaved }: Props) {
   useEffect(() => {
     if (!open) return;
     setError(null);
-    setOrderNumber("");
+    setOrderNumber(initialOrderNumber?.trim() ?? "");
     setPendingCash(false);
     setPendingVnpay(false);
-  }, [open]);
+  }, [open, initialOrderNumber]);
 
   if (!open) return null;
 
@@ -82,9 +94,11 @@ export function StaffPaymentCreateDialog({ open, onClose, onSaved }: Props) {
         setError("Không nhận được link thanh toán VNPAY");
         return;
       }
-      const w = window.open(url, "_blank", "noopener,noreferrer");
-      if (w == null) {
-        window.location.assign(url);
+      const opened = openUrlInNewTab(url);
+      if (!opened) {
+        setError(
+          "Trình duyệt chặn cửa sổ mới. Cho phép popup cho trang này rồi thử lại.",
+        );
         return;
       }
       onSaved();
@@ -111,34 +125,43 @@ export function StaffPaymentCreateDialog({ open, onClose, onSaved }: Props) {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <h2 id="create-payment-title" className="font-serif text-xl font-semibold text-brand-900">
-          Thêm thanh toán
+          {customerDeliveryOnly ? "Thanh toán đơn giao hàng" : "Thêm thanh toán"}
         </h2>
 
         <div className="mt-6 space-y-3">
           {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
 
-          <label className="block text-xs font-medium text-stone-600">
-            Mã đơn (orderNumber)
-            <input
-              className={fieldClass}
-              value={orderNumber}
-              onChange={(e) => setOrderNumber(e.target.value)}
-              required
-              minLength={1}
-              maxLength={50}
-              autoComplete="off"
-            />
-          </label>
+          {lockOrderNumber ? (
+            <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <span className="text-xs font-medium text-stone-500">Mã đơn</span>
+              <p className="mt-0.5 font-mono font-semibold text-brand-900">{orderNumber}</p>
+            </div>
+          ) : (
+            <label className="block text-xs font-medium text-stone-600">
+              Mã đơn (orderNumber)
+              <input
+                className={fieldClass}
+                value={orderNumber}
+                onChange={(e) => setOrderNumber(e.target.value)}
+                required
+                minLength={1}
+                maxLength={50}
+                autoComplete="off"
+              />
+            </label>
+          )}
 
-          <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => void handleCash()}
-              className={`${btnPrimary} border-brand-200 bg-brand-600 text-white hover:bg-brand-700`}
-            >
-              {pendingCash ? "Đang tạo…" : "Thanh toán tiền mặt"}
-            </button>
+          <div className={`flex flex-col gap-2 pt-1 ${customerDeliveryOnly ? "" : "sm:flex-row"}`}>
+            {!customerDeliveryOnly ? (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => void handleCash()}
+                className={`${btnPrimary} border-brand-200 bg-brand-600 text-white hover:bg-brand-700`}
+              >
+                {pendingCash ? "Đang tạo…" : "Thanh toán tiền mặt"}
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={pending}

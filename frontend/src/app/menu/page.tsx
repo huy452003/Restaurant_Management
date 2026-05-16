@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { TableNumberSelect } from "@/components/TableNumberSelect";
 import { useAuth } from "@/context/auth-context";
+import { useRestaurantTables } from "@/hooks/use-restaurant-tables";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
 import type { MenuItemModel, OrderModel, OrderType, PaginatedResponse } from "@/lib/api/types";
 import { formatVnd } from "@/lib/money";
+import { orderRequiresTable } from "@/lib/orders/order-type";
 
 type CartLine = { item: MenuItemModel; quantity: number };
 
@@ -17,8 +20,14 @@ export default function MenuPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMenu, setLoadingMenu] = useState(true);
   const [cart, setCart] = useState<Record<number, CartLine>>({});
-  const [tableNumber, setTableNumber] = useState(1);
+  const [tableNumber, setTableNumber] = useState<number | "">("");
   const [orderType, setOrderType] = useState<OrderType>("DINE_IN");
+  const needsTable = orderRequiresTable(orderType);
+  const { tables, loading: tablesLoading, error: tablesError, reload: reloadTables } = useRestaurantTables({
+    enabled: !!user && needsTable,
+    tableStatus: "AVAILABLE",
+    excludeTablesWithPendingOrder: true,
+  });
   const [notes, setNotes] = useState("");
   const [checkoutMsg, setCheckoutMsg] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
@@ -48,6 +57,17 @@ export default function MenuPage() {
       cancelled = true;
     };
   }, [user, authLoading, router]);
+
+  useEffect(() => {
+    if (!needsTable) {
+      setTableNumber("");
+      return;
+    }
+    if (tables.length === 0) return;
+    if (tableNumber === "" || !tables.some((t) => t.tableNumber === tableNumber)) {
+      setTableNumber(tables[0].tableNumber);
+    }
+  }, [tables, tableNumber, needsTable]);
 
   const addToCart = useCallback((item: MenuItemModel) => {
     setCart((prev) => {
@@ -81,13 +101,14 @@ export default function MenuPage() {
 
   async function checkout() {
     if (!user || cartLines.length === 0) return;
+    if (needsTable && (tableNumber === "" || tables.length === 0)) return;
     setCheckoutMsg(null);
     setCheckoutPending(true);
     try {
       const orderRes = await apiFetch<OrderModel>("/orders", {
         method: "POST",
         body: JSON.stringify({
-          tableNumber,
+          ...(needsTable ? { tableNumber } : {}),
           orderType,
           notes: notes.trim() || undefined,
         }),
@@ -105,8 +126,10 @@ export default function MenuPage() {
       setCart({});
       setNotes("");
       setCheckoutMsg(`Đã tạo đơn ${orderNumber}. Bạn có thể gửi bếp từ trang Đơn hàng.`);
+      void reloadTables();
     } catch (e) {
       setCheckoutMsg(e instanceof ApiError ? e.message : "Thanh toán giỏ thất bại");
+      void reloadTables();
     } finally {
       setCheckoutPending(false);
     }
@@ -211,14 +234,6 @@ export default function MenuPage() {
           </p>
 
           <div className="space-y-2 border-t border-stone-100 pt-4">
-            <label className="block text-xs font-medium text-stone-600">Số bàn</label>
-            <input
-              type="number"
-              min={1}
-              value={tableNumber}
-              onChange={(e) => setTableNumber(Number(e.target.value) || 1)}
-              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-600/25"
-            />
             <label className="block text-xs font-medium text-stone-600">Loại đơn</label>
             <select
               value={orderType}
@@ -226,9 +241,21 @@ export default function MenuPage() {
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-600/25"
             >
               <option value="DINE_IN">Tại chỗ</option>
-              <option value="TAKE_AWAY">Mang về</option>
               <option value="DELIVERY">Giao hàng</option>
             </select>
+            {needsTable ? (
+              <TableNumberSelect
+                id="cart-table"
+                value={tableNumber}
+                onChange={setTableNumber}
+                tables={tables}
+                loading={tablesLoading}
+                error={tablesError}
+                emptyHint="Không còn bàn trống. Vui lòng quay lại sau ít phút nữa."
+              />
+            ) : (
+              <p className="text-xs text-stone-500">Đơn giao hàng không cần chọn bàn.</p>
+            )}
             <label className="block text-xs font-medium text-stone-600">Ghi chú</label>
             <textarea
               value={notes}
@@ -259,7 +286,11 @@ export default function MenuPage() {
 
           <button
             type="button"
-            disabled={cartLines.length === 0 || checkoutPending}
+            disabled={
+              cartLines.length === 0 ||
+              checkoutPending ||
+              (needsTable && (tableNumber === "" || tables.length === 0 || tablesLoading))
+            }
             onClick={() => void checkout()}
             className="w-full rounded-xl bg-brand-800 py-3 text-sm font-semibold text-white shadow transition hover:bg-brand-900 disabled:cursor-not-allowed disabled:opacity-50"
           >

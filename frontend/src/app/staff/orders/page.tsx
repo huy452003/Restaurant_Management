@@ -4,17 +4,17 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
 import { StaffOrderEditDialog } from "@/components/staff/StaffOrderEditDialog";
+import { StaffPaymentCreateDialog } from "@/components/staff/StaffPaymentCreateDialog";
 import { useAuth } from "@/context/auth-context";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { OrderModel, OrderStatus, PaginatedResponse, TableModel, UserModel } from "@/lib/api/types";
+import type { OrderModel, OrderStatus, PaginatedResponse, TableModel } from "@/lib/api/types";
+import { canCreatePaymentForOrder } from "@/lib/orders/order-payment";
 import { formatVnd } from "@/lib/money";
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
   PENDING: "Chờ xác nhận",
   CONFIRMED: "Đã xác nhận",
   PREPARING: "Đang chuẩn bị",
-  READY: "Sẵn sàng",
-  SERVED: "Đã phục vụ",
   COMPLETED: "Hoàn thành",
   CANCELLED: "Đã hủy",
 };
@@ -25,11 +25,13 @@ function isTerminal(s: OrderStatus): boolean {
 
 export default function StaffOrdersPage() {
   const { user, loading: authLoading, hasRole } = useAuth();
+  const canManagePayment = hasRole("CASHIER", "MANAGER", "ADMIN");
+  const canEditOrder = hasRole("ADMIN", "MANAGER", "CASHIER");
   const router = useRouter();
   const [orders, setOrders] = useState<OrderModel[]>([]);
-  const [waiters, setWaiters] = useState<UserModel[]>([]);
   const [tables, setTables] = useState<TableModel[]>([]);
   const [editing, setEditing] = useState<OrderModel | null>(null);
+  const [payingOrder, setPayingOrder] = useState<OrderModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -49,21 +51,10 @@ export default function StaffOrdersPage() {
     }
   }, []);
 
-  const loadWaiters = useCallback(async () => {
-    try {
-      const res = await apiFetch<PaginatedResponse<UserModel>>(
-        `/users/filterAndPaginate?${buildPageParams(0, 100, { role: "WAITER" })}`,
-      );
-      setWaiters(res.data.content ?? []);
-    } catch {
-      setWaiters([]);
-    }
-  }, []);
-
   const loadTables = useCallback(async () => {
     try {
       const res = await apiFetch<PaginatedResponse<TableModel>>(
-        `/tables/filters?${buildPageParams(0, 200)}`,
+        `/tables/filters?${buildPageParams(0, 200, { freshSnapshot: true })}`,
       );
       setTables(res.data.content ?? []);
     } catch {
@@ -77,14 +68,15 @@ export default function StaffOrdersPage() {
       router.replace("/login?next=/staff/orders");
       return;
     }
-    if (!hasRole("ADMIN", "MANAGER")) {
+    if (!canEditOrder && !canManagePayment) {
       router.replace("/staff");
       return;
     }
     void load();
-    void loadWaiters();
-    void loadTables();
-  }, [user, authLoading, hasRole, router, load, loadWaiters, loadTables]);
+    if (canEditOrder) {
+      void loadTables();
+    }
+  }, [user, authLoading, canEditOrder, canManagePayment, router, load, loadTables]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -107,30 +99,49 @@ export default function StaffOrdersPage() {
                 <th className="px-4 py-3 font-medium">Trạng thái</th>
                 <th className="px-4 py-3 font-medium">Món</th>
                 <th className="px-4 py-3 font-medium">Tổng</th>
-                <th className="px-4 py-3 font-medium w-28">Thao tác</th>
+                <th className="px-4 py-3 font-medium">Thao tác</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((o) => {
                 const terminal = isTerminal(o.orderStatus);
+                const showPay = canManagePayment && canCreatePaymentForOrder(o);
+                const showEdit = canEditOrder && !terminal;
                 return (
                   <tr key={o.id} className="border-t border-stone-100 bg-surface hover:bg-stone-50/80">
                     <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
-                    <td className="px-4 py-3">{o.tableNumber}</td>
+                    <td className="px-4 py-3">{o.tableNumber ?? "—"}</td>
                     <td className="px-4 py-3 text-muted">{o.customerName ?? "—"}</td>
                     <td className="px-4 py-3">{STATUS_LABEL[o.orderStatus]}</td>
                     <td className="px-4 py-3 tabular-nums">{o.totalOrderItem ?? 0}</td>
                     <td className="px-4 py-3 font-medium">{formatVnd(o.totalAmount)}</td>
                     <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        disabled={terminal}
-                        title={terminal ? "Đơn đã kết thúc" : undefined}
-                        onClick={() => setEditing(o)}
-                        className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Sửa
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        {showEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void loadTables();
+                              setEditing(o);
+                            }}
+                            className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 hover:bg-brand-100"
+                          >
+                            Sửa
+                          </button>
+                        ) : null}
+                        {showPay ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditing(null);
+                              setPayingOrder(o);
+                            }}
+                            className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-100"
+                          >
+                            Thanh toán
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -140,13 +151,23 @@ export default function StaffOrdersPage() {
         </div>
       )}
 
-      <StaffOrderEditDialog
-        row={editing}
-        waiters={waiters}
-        tables={tables}
-        onClose={() => setEditing(null)}
-        onSaved={() => void load()}
-      />
+      {canEditOrder ? (
+        <StaffOrderEditDialog
+          row={editing}
+          tables={tables}
+          onClose={() => setEditing(null)}
+          onSaved={() => void load()}
+        />
+      ) : null}
+
+      {canManagePayment ? (
+        <StaffPaymentCreateDialog
+          open={payingOrder != null}
+          initialOrderNumber={payingOrder?.orderNumber}
+          onClose={() => setPayingOrder(null)}
+          onSaved={() => void load()}
+        />
+      ) : null}
     </div>
   );
 }
