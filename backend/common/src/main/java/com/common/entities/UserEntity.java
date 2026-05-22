@@ -11,9 +11,10 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
+import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
-import com.common.enums.Gender;
+import com.common.utils.VietnamMobilePhoneUtils;
 
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.GrantedAuthority;
@@ -91,6 +92,9 @@ public class UserEntity extends BaseEntity implements UserDetails {
         }
         if (this.username != null) {
             this.username = this.username.toLowerCase().trim();
+        }
+        if (this.phone != null) {
+            this.phone = VietnamMobilePhoneUtils.normalize(this.phone);
         }
     }
 }

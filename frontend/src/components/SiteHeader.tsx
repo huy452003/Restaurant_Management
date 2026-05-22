@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { CartNavButton } from "@/components/CartNavButton";
 import { LocaleSwitcher } from "@/components/LocaleSwitcher";
+import { UserAccountMenu } from "@/components/UserAccountMenu";
 import { useAuth } from "@/context/auth-context";
 import type { UserRole } from "@/lib/api/types";
+import { fontSerif } from "@/lib/ui/bakery";
 import { STAFF_ROLE_LABEL_VI } from "@/lib/staff/role-labels";
 
 type NavItem = {
@@ -16,32 +19,26 @@ type NavItem = {
 
 const nav: NavItem[] = [
   { href: "/", label: "Trang chủ" },
+  { href: "/about", label: "Về chúng tôi" },
   { href: "/menu", label: "Thực đơn", auth: true },
-  { href: "/orders", label: "Đơn hàng", auth: true, roles: ["CUSTOMER"] },
-  { href: "/reservations", label: "Đặt bàn", auth: true, roles: ["CUSTOMER"] },
-  {
-    href: "/staff",
-    label: "Quản lý",
-    auth: true,
-    roles: ["ADMIN", "MANAGER", "CASHIER", "CHEF"],
-  },
+  { href: "/reservations", label: "Đặt bàn", auth: true },
 ];
 
 export function SiteHeader() {
   const pathname = usePathname();
-  const { user, loading, logout } = useAuth();
+  const { user, loading } = useAuth();
 
   return (
-    <header className="sticky top-0 z-50 border-b border-stone-200/80 bg-surface/95 shadow-sm backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2 shrink-0">
+    <header className="sticky top-0 z-50 border-b border-brand-100/90 bg-surface/90 shadow-[0_4px_24px_-8px_rgba(74,55,40,0.08)] backdrop-blur-md">
+      <div className="mx-auto flex h-[4.25rem] max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
           <span
-            className="font-serif text-2xl font-semibold tracking-tight text-brand-800"
-            style={{ fontFamily: "var(--font-cormorant), serif" }}
+            className="font-serif text-2xl font-semibold tracking-tight text-brand-900"
+            style={fontSerif}
           >
             Bistro
           </span>
-          <span className="hidden rounded-full bg-brand-100 px-2 py-0.5 text-xs font-medium text-brand-800 sm:inline">
+          <span className="hidden rounded-full bg-blush px-2.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-brand-800 sm:inline">
             Nhà hàng
           </span>
         </Link>
@@ -55,10 +52,10 @@ export function SiteHeader() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
                   active
-                    ? "bg-brand-100 text-brand-900"
-                    : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
+                    ? "bg-brand-800 text-white shadow-sm"
+                    : "text-muted hover:bg-brand-50 hover:text-brand-900"
                 }`}
               >
                 {item.label}
@@ -72,36 +69,25 @@ export function SiteHeader() {
           {!loading && user ? (
             <>
               <span
-                className="max-w-[11rem] truncate rounded-md bg-stone-100 px-2 py-1 text-xs font-medium text-stone-700 sm:max-w-[13rem]"
+                className="hidden max-w-[11rem] truncate rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-800 sm:inline sm:max-w-[13rem]"
                 title={STAFF_ROLE_LABEL_VI[user.role]}
               >
                 {STAFF_ROLE_LABEL_VI[user.role]}
               </span>
-              <span
-                className="max-w-[10rem] truncate text-sm font-medium text-stone-800 sm:max-w-[14rem] md:max-w-[18rem]"
-                title={user.username}
-              >
-                {user.username}
-              </span>
-              <button
-                type="button"
-                onClick={() => void logout()}
-                className="rounded-lg border border-stone-200 px-3 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50"
-              >
-                Đăng xuất
-              </button>
+              <CartNavButton />
+              <UserAccountMenu />
             </>
           ) : !loading ? (
             <>
               <Link
                 href="/login"
-                className="rounded-lg px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-100"
+                className="rounded-full px-4 py-2 text-sm font-medium text-brand-800 transition hover:bg-brand-50"
               >
                 Đăng nhập
               </Link>
               <Link
                 href="/register"
-                className="rounded-lg bg-brand-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-900"
+                className="rounded-full bg-brand-800 px-5 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-brand-900"
               >
                 Đăng ký
               </Link>
@@ -110,7 +96,7 @@ export function SiteHeader() {
         </div>
       </div>
 
-      <div className="flex gap-1 overflow-x-auto border-t border-stone-100 px-4 py-2 md:hidden">
+      <div className="flex gap-2 overflow-x-auto border-t border-brand-50 px-4 py-2.5 md:hidden">
         {nav.map((item) => {
           if (item.auth && !user) return null;
           if (item.roles && user && !item.roles.includes(user.role)) return null;
@@ -119,8 +105,8 @@ export function SiteHeader() {
             <Link
               key={item.href}
               href={item.href}
-              className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium ${
-                active ? "bg-brand-800 text-white" : "bg-stone-100 text-stone-700"
+              className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-medium ${
+                active ? "bg-brand-800 text-white" : "bg-brand-50 text-brand-800"
               }`}
             >
               {item.label}

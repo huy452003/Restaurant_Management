@@ -92,7 +92,8 @@ export interface OrderModel {
   orderType: OrderType;
   subTotal?: string;
   tax?: string;
-  totalAmount?: string;
+  /** Jackson có thể serialize BigDecimal thành number trong JSON. */
+  totalAmount?: string | number;
   totalOrderItem?: number;
   /** Backend: còn có thể tạo thanh toán mới cho đơn này */
   canAcceptPayment?: boolean;
@@ -110,12 +111,57 @@ export interface ReservationModel {
   customerPhone?: string;
   customerEmail?: string;
   tableNumber: number;
-  reservationTs: string;
+  reservationDate?: string;
+  reservationTime?: string;
   numberOfGuests: number;
   reservationStatus: string;
   specialRequest?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** POST /reservations — khách chọn bàn khi tạo. */
+export interface ReservationCustomerCreateModel {
+  tableNumber: number;
+  reservationDate: string;
+  reservationTime: string;
+  numberOfGuests: number;
+  specialRequest?: string;
+}
+
+/** PATCH /reservations/{id} — không gửi tableNumber; bàn giữ nguyên từ đặt chỗ hiện tại. */
+export interface ReservationCustomerUpdateModel {
+  reservationDate: string;
+  reservationTime: string;
+  numberOfGuests: number;
+  specialRequest?: string;
+}
+
+export type ReservationStatus =
+  | "PENDING"
+  | "CONFIRMED"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "NO_SHOW";
+
+/** PUT /reservations/admin */
+export interface ReservationAdminRequestModel {
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  tableNumber: number;
+  reservationDate: string;
+  reservationTime: string;
+  numberOfGuests: number;
+  reservationStatus: ReservationStatus;
+  specialRequest?: string;
+}
+
+export interface ReservationAvailabilityModel {
+  tableNumber: number;
+  date: string;
+  /** HH:mm — các khung đã có đặt chỗ; khung cố định mirror backend ReservationSlot. */
+  bookedTimes: string[];
 }
 
 export interface UserModel {

@@ -7,7 +7,9 @@ import com.common.enums.ReservationStatus;
 import com.common.models.PaginatedResponse;
 import com.common.models.Response;
 import com.common.models.reservation.ReservationAdminRequestModel;
-import com.common.models.reservation.ReservationCustomerRequestModel;
+import com.common.models.reservation.ReservationAvailabilityModel;
+import com.common.models.reservation.ReservationCustomerCreateModel;
+import com.common.models.reservation.ReservationCustomerUpdateModel;
 import com.common.models.reservation.ReservationModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
 import com.logging.models.LogContext;
@@ -17,15 +19,18 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
-import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -65,16 +70,17 @@ public class ReservationController {
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer tableNumber,
-        @RequestParam(required = false) LocalDateTime reservationTs,
+        @RequestParam(required = false) @DateTimeFormat(pattern = "dd-MM-yyyy") LocalDate reservationDate,
+        @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime reservationTime,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer numberOfGuests,
         @RequestParam(required = false) ReservationStatus reservationStatus,
-        @PageableDefault(size = 5, sort = "id") Pageable pageable
+        @PageableDefault(size = 5, sort = "id", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         LogContext logContext = getLogContext("filtersForCustomer", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext); 
 
         Page<ReservationModel> reservationPage = reservationService.filtersForCustomer(
-            id, tableNumber, reservationTs, numberOfGuests, reservationStatus, pageable
+            id, tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus, pageable
         );
         PaginatedResponse<ReservationModel> paginatedResponse = PaginatedResponse.of(reservationPage);
         Response<PaginatedResponse<ReservationModel>> response = new Response<>(
@@ -89,7 +95,7 @@ public class ReservationController {
     }
 
     @GetMapping("/filters/admin")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
     public ResponseEntity<Response<PaginatedResponse<ReservationModel>>> filtersForAdmin(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -97,17 +103,18 @@ public class ReservationController {
         @RequestParam(required = false) String customerPhone,
         @RequestParam(required = false) String customerEmail,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer tableNumber,
-        @RequestParam(required = false) LocalDateTime reservationTs,
+        @RequestParam(required = false) @DateTimeFormat(pattern = "dd-MM-yyyy") LocalDate reservationDate,
+        @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime reservationTime,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer numberOfGuests,
         @RequestParam(required = false) ReservationStatus reservationStatus,
-        @PageableDefault(size = 5, sort = "id") Pageable pageable
+        @PageableDefault(size = 5, sort = "id", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         LogContext logContext = getLogContext("filtersForAdmin", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
         Page<ReservationModel> reservationPage = reservationService.filtersForAdmin(
             id, customerName, customerPhone, customerEmail,
-            tableNumber, reservationTs, numberOfGuests, reservationStatus, pageable
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus, pageable
         );
         PaginatedResponse<ReservationModel> paginatedResponse = PaginatedResponse.of(reservationPage);
         Response<PaginatedResponse<ReservationModel>> response = new Response<>(
@@ -121,11 +128,33 @@ public class ReservationController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
+    @GetMapping("/availability")
+    @PreAuthorize("hasAnyRole('CUSTOMER', 'ADMIN', 'MANAGER', 'CASHIER')")
+    public ResponseEntity<Response<ReservationAvailabilityModel>> availability(
+        Locale locale,
+        @RequestParam @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer tableNumber,
+        @RequestParam @NotNull @DateTimeFormat(pattern = "dd-MM-yyyy") LocalDate date
+    ) {
+        LogContext logContext = getLogContext("availability", Collections.emptyList());
+        log.logInfo("is running, preparing to call service ...!", logContext);
+
+        ReservationAvailabilityModel data = reservationService.getTimeSlotAvailability(tableNumber, date);
+        Response<ReservationAvailabilityModel> response = new Response<>(
+            200,
+            messageSource.getMessage("response.message.getReservationAvailabilitySuccess", null, locale),
+            "reservationAvailability",
+            null,
+            data
+        );
+        log.logInfo("completed, returning response ...!", logContext);
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
     @PostMapping("")
     @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<Response<List<ReservationModel>>> create(
         Locale locale,
-        @RequestBody @Valid List<ReservationCustomerRequestModel> reservations
+        @RequestBody @Valid List<ReservationCustomerCreateModel> reservations
     ) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
@@ -144,13 +173,13 @@ public class ReservationController {
 
     @PatchMapping("{reservationId}")
     @PreAuthorize("hasAnyRole('CUSTOMER')")
-    public ResponseEntity<Response<ReservationModel>> update(
+    public ResponseEntity<Response<ReservationModel>> updateForCustomer(
         Locale locale,
-        @RequestBody @Valid ReservationCustomerRequestModel request,
+        @RequestBody @Valid ReservationCustomerUpdateModel request,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer reservationId
     ) {
         LogContext logContext = getLogContext(
-            "update",
+            "updateForCustomer",
             Collections.singletonList(reservationId)
         );
         log.logInfo("is running, preparing to call service ...!", logContext);
@@ -168,7 +197,7 @@ public class ReservationController {
     }
 
     @PutMapping("/admin")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
     public ResponseEntity<Response<List<ReservationModel>>> updateByAdmin(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<ReservationAdminRequestModel> request

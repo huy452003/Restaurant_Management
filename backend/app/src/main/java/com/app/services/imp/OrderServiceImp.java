@@ -12,6 +12,8 @@ import com.app.services.PaymentService;
 import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.OrderTableHoldUtils;
+import com.app.utils.TableHoldGuard;
+import com.app.utils.TableLookupUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.entities.TableEntity;
 import com.common.repositories.OrderItemRepository;
@@ -683,24 +685,16 @@ public class OrderServiceImp implements OrderService {
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
-        assertNoConflictingOrderOnTable(tableNumber, order.getId(), logContext);
-        TableEntity table = getTable(tableNumber, logContext);
+        TableHoldGuard.assertNoHoldingOrderOnTable(
+            orderRepository, tableNumber, order.getId(), "OrderModel", logContext, log
+        );
+        TableEntity table = TableLookupUtils.requireTable(
+            tableRepository, tableNumber, "OrderModel", logContext, log
+        );
         if (customerActor != null && customerActor.getRole() == UserRole.CUSTOMER) {
             assertTableAvailableForNewOrder(table, logContext);
         }
         order.setTable(table);
-    }
-
-    private TableEntity getTable(Integer tableNumber, LogContext logContext) {
-        return tableRepository.findByTableNumber(tableNumber).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Table not found with tableNumber: " + tableNumber,
-                Collections.singletonList(tableNumber),
-                "TableModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
     }
 
     private void assertTableAvailableForNewOrder(TableEntity table, LogContext logContext) {
@@ -712,32 +706,6 @@ public class OrderServiceImp implements OrderService {
                 + " (status: " + table.getTableStatus() + ")",
             "OrderModel",
             "table must be AVAILABLE"
-        );
-        log.logError(e.getMessage(), e, logContext);
-        throw e;
-    }
-
-    private void assertNoConflictingOrderOnTable(
-        Integer tableNumber,
-        Integer excludeOrderId,
-        LogContext logContext
-    ) {
-        if (tableNumber == null) {
-            return;
-        }
-        if (!orderRepository.existsActiveHoldingOrderOnTable(
-            tableNumber,
-            OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES,
-            excludeOrderId
-        )) {
-            return;
-        }
-        ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-            "Table " + tableNumber
-                + " already has an active order (pending, confirmed, or preparing). "
-                + "Choose another table or complete/cancel the existing order first.",
-            "OrderModel",
-            "table has active holding order"
         );
         log.logError(e.getMessage(), e, logContext);
         throw e;

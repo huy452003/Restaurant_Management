@@ -1,37 +1,43 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { FilterBar } from "@/components/list/FilterBar";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
 import { StaffMenuItemCreateDialog } from "@/components/staff/StaffMenuItemCreateDialog";
 import { StaffMenuItemEditDialog } from "@/components/staff/StaffMenuItemEditDialog";
 import { useAuth } from "@/context/auth-context";
-import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { MenuItemModel, PaginatedResponse } from "@/lib/api/types";
+import { usePaginatedList } from "@/hooks/use-paginated-list";
+import type { MenuItemModel } from "@/lib/api/types";
+import { MENU_ITEM_LIST_FILTERS } from "@/lib/list/presets";
 import { formatVnd } from "@/lib/money";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 export default function StaffMenuItemsPage() {
   const { user, loading: authLoading, hasRole } = useAuth();
   const router = useRouter();
-  const [rows, setRows] = useState<MenuItemModel[]>([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<MenuItemModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch<PaginatedResponse<MenuItemModel>>(`/menu-items/filters?${buildPageParams(0, 80)}`);
-      setRows(res.data.content ?? []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Không tải được món");
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    rows,
+    page,
+    totalPages,
+    totalElements,
+    loading,
+    error,
+    draftFilters,
+    setFilter,
+    applyFilters,
+    resetFilters,
+    reload,
+    goToPage,
+    loadInitial,
+  } = usePaginatedList<MenuItemModel>({
+    basePath: "/menu-items/filters",
+    pageSize: 10,
+  });
 
   useEffect(() => {
     if (authLoading) return;
@@ -43,8 +49,8 @@ export default function StaffMenuItemsPage() {
       router.replace("/staff");
       return;
     }
-    void Promise.resolve().then(() => load());
-  }, [user, authLoading, hasRole, router, load]);
+    loadInitial();
+  }, [user, authLoading, hasRole, router, loadInitial]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -64,10 +70,20 @@ export default function StaffMenuItemsPage() {
           Thêm món
         </button>
       </div>
+      <FilterBar
+        fields={MENU_ITEM_LIST_FILTERS}
+        values={draftFilters}
+        onChange={setFilter}
+        onApply={applyFilters}
+        onReset={resetFilters}
+        loading={loading}
+      />
+
       {error ? <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p> : null}
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <p className="mt-8 text-muted">Đang tải…</p>
       ) : (
+        <>
         <div className="mt-6 overflow-x-auto rounded-xl border border-stone-200">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-stone-600">
@@ -85,7 +101,9 @@ export default function StaffMenuItemsPage() {
                   <td className="px-3 py-2.5 font-medium">{m.name}</td>
                   <td className="px-3 py-2.5 text-muted">{m.categoryName}</td>
                   <td className="px-3 py-2.5">{formatVnd(m.price)}</td>
-                  <td className="px-3 py-2.5">{m.menuItemStatus}</td>
+                  <td className="px-3 py-2.5">
+                    <StatusBadge domain="menuItem" status={m.menuItemStatus} />
+                  </td>
                   <td className="px-3 py-2.5">
                     <button
                       type="button"
@@ -103,14 +121,24 @@ export default function StaffMenuItemsPage() {
             </tbody>
           </table>
         </div>
+        {rows.length === 0 ? <p className="mt-4 text-sm text-muted">Không có kết quả phù hợp.</p> : null}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          loading={loading}
+          onPageChange={goToPage}
+          unitLabel="món"
+        />
+        </>
       )}
 
-      <StaffMenuItemCreateDialog open={creating} onClose={() => setCreating(false)} onSaved={() => void load()} />
+      <StaffMenuItemCreateDialog open={creating} onClose={() => setCreating(false)} onSaved={reload} />
       <StaffMenuItemEditDialog
         open={editing != null}
         row={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => void load()}
+        onSaved={reload}
       />
     </div>
   );

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api/client";
 import type { PaymentModel } from "@/lib/api/types";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatVnd } from "@/lib/money";
 
 type Props = {
@@ -43,7 +44,7 @@ export function StaffPaymentEditDialog({ open, row, onClose, onSaved }: Props) {
   if (!open || !row) return null;
 
   const editingRow = row;
-  const isPending = editingRow.paymentStatus === "PENDING";
+  const isPending = (editingRow.paymentStatus?.toUpperCase() ?? "") === "PENDING";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,7 +81,7 @@ export function StaffPaymentEditDialog({ open, row, onClose, onSaved }: Props) {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <h2 id="edit-payment-title" className="font-serif text-xl font-semibold text-brand-900">
-          Thanh toán{" "}
+          {isPending ? "Thanh toán" : "Chi tiết thanh toán"}{" "}
           <span className="font-mono text-[1.0625rem] font-semibold tabular-nums tracking-normal text-brand-900">
             #{editingRow.id}
           </span>
@@ -105,7 +106,9 @@ export function StaffPaymentEditDialog({ open, row, onClose, onSaved }: Props) {
           </div>
           <div className="flex justify-between gap-2 border-b border-stone-100 py-1">
             <dt className="text-stone-500">Trạng thái</dt>
-            <dd>{STATUS_LABEL[editingRow.paymentStatus] ?? editingRow.paymentStatus}</dd>
+            <dd>
+              <StatusBadge domain="payment" status={editingRow.paymentStatus} />
+            </dd>
           </div>
           {editingRow.transactionId ? (
             <div className="flex justify-between gap-2 border-b border-stone-100 py-1">

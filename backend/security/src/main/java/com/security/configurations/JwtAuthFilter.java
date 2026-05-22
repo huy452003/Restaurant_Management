@@ -147,7 +147,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             // POST /users/logout cần JWT để blacklist + @PreAuthorize — không skip ở đây
             || uri.contains("/public/")
             || uri.contains("/payments/vnpay/return")
-            || uri.contains("/payments/vnpay/ipn");
+            || uri.contains("/payments/vnpay/ipn")
+            || uri.contains("/menu-items/filters");
     }
 
 }

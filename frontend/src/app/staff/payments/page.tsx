@@ -1,13 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { FilterBar } from "@/components/list/FilterBar";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
 import { StaffPaymentEditDialog } from "@/components/staff/StaffPaymentEditDialog";
 import { useAuth } from "@/context/auth-context";
-import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { PaginatedResponse, PaymentModel } from "@/lib/api/types";
+import { usePaginatedList } from "@/hooks/use-paginated-list";
+import type { PaymentModel } from "@/lib/api/types";
+import { initVnpayCheckout } from "@/lib/payments/init-vnpay";
+import { LIST_EXTRA_SORT_NEWEST, PAYMENT_LIST_FILTERS } from "@/lib/list/presets";
 import { formatVnd } from "@/lib/money";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 const METHOD_LABEL: Record<string, string> = {
   CASH: "Tiền mặt",
@@ -21,32 +26,36 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: "Đã hủy",
 };
 
-function isPaymentTerminal(p: PaymentModel): boolean {
-  const s = p.paymentStatus?.toUpperCase() ?? "";
-  return s === "COMPLETED" || s === "CANCELLED";
+function isPaymentPending(p: PaymentModel): boolean {
+  return (p.paymentStatus?.toUpperCase() ?? "") === "PENDING";
 }
 
 export default function StaffPaymentsPage() {
   const { user, loading: authLoading, hasRole } = useAuth();
   const router = useRouter();
-  const [rows, setRows] = useState<PaymentModel[]>([]);
   const [editing, setEditing] = useState<PaymentModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [vnpayError, setVnpayError] = useState<string | null>(null);
+  const [vnpayPendingId, setVnpayPendingId] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch<PaginatedResponse<PaymentModel>>(`/payments/filters?${buildPageParams(0, 80)}`);
-      setRows(res.data.content ?? []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Không tải được thanh toán");
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    rows,
+    page,
+    totalPages,
+    totalElements,
+    loading,
+    error,
+    draftFilters,
+    setFilter,
+    applyFilters,
+    resetFilters,
+    reload,
+    goToPage,
+    loadInitial,
+  } = usePaginatedList<PaymentModel>({
+    basePath: "/payments/filters",
+    pageSize: 15,
+    extraParams: LIST_EXTRA_SORT_NEWEST,
+  });
 
   useEffect(() => {
     if (authLoading) return;
@@ -58,8 +67,8 @@ export default function StaffPaymentsPage() {
       router.replace("/staff");
       return;
     }
-    void Promise.resolve().then(() => load());
-  }, [user, authLoading, hasRole, router, load]);
+    loadInitial();
+  }, [user, authLoading, hasRole, router, loadInitial]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -68,10 +77,21 @@ export default function StaffPaymentsPage() {
         Thanh toán
       </h1>
       <p className="mt-1 text-sm text-muted">Tạo thanh toán mới từ trang Đơn hàng.</p>
+      <FilterBar
+        fields={PAYMENT_LIST_FILTERS}
+        values={draftFilters}
+        onChange={setFilter}
+        onApply={applyFilters}
+        onReset={resetFilters}
+        loading={loading}
+      />
+
       {error ? <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p> : null}
-      {loading ? (
+      {vnpayError ? <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{vnpayError}</p> : null}
+      {loading && rows.length === 0 ? (
         <p className="mt-8 text-muted">Đang tải…</p>
       ) : (
+        <>
         <div className="mt-6 overflow-x-auto rounded-xl border border-stone-200">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-stone-600">
@@ -88,7 +108,21 @@ export default function StaffPaymentsPage() {
             </thead>
             <tbody>
               {rows.map((p) => {
-                const terminal = isPaymentTerminal(p);
+                const pending = isPaymentPending(p);
+                const isVnpay = (p.paymentMethod?.toUpperCase() ?? "") === "VNPAY";
+                async function openVnpayAgain() {
+                  const on = p.orderNumber?.trim();
+                  if (!on) return;
+                  setVnpayError(null);
+                  setVnpayPendingId(p.id);
+                  const result = await initVnpayCheckout(on);
+                  setVnpayPendingId(null);
+                  if (!result.ok) {
+                    setVnpayError(result.message);
+                    return;
+                  }
+                  reload();
+                }
                 return (
                 <tr key={p.id} className="border-t border-stone-100 bg-surface hover:bg-stone-50/80">
                   <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-stone-600">{p.id}</td>
@@ -98,7 +132,9 @@ export default function StaffPaymentsPage() {
                   </td>
                   <td className="px-3 py-2.5">{METHOD_LABEL[p.paymentMethod] ?? p.paymentMethod}</td>
                   <td className="px-3 py-2.5 font-medium tabular-nums">{formatVnd(p.amount)}</td>
-                  <td className="px-3 py-2.5">{STATUS_LABEL[p.paymentStatus] ?? p.paymentStatus}</td>
+                  <td className="px-3 py-2.5">
+                    <StatusBadge domain="payment" status={p.paymentStatus} />
+                  </td>
                   <td className="max-w-[120px] px-3 py-2.5">
                     <span className="line-clamp-2 break-all font-mono text-xs text-stone-600">
                       {p.transactionId ?? "—"}
@@ -107,12 +143,27 @@ export default function StaffPaymentsPage() {
                   <td className="px-3 py-2.5">
                     <button
                       type="button"
-                      disabled={terminal}
-                      title={terminal ? "Thanh toán đã kết thúc" : undefined}
-                      onClick={() => setEditing(p)}
-                      className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={vnpayPendingId === p.id}
+                      onClick={() => {
+                        if (pending && isVnpay) {
+                          void openVnpayAgain();
+                          return;
+                        }
+                        setEditing(p);
+                      }}
+                      className={
+                        pending
+                          ? "rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-100"
+                          : "rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50"
+                      }
                     >
-                      Sửa
+                      {vnpayPendingId === p.id
+                        ? "Đang mở…"
+                        : pending && isVnpay
+                          ? "Mở VNPAY"
+                          : pending
+                            ? "Xử lý"
+                            : "Chi tiết"}
                     </button>
                   </td>
                 </tr>
@@ -121,13 +172,23 @@ export default function StaffPaymentsPage() {
             </tbody>
           </table>
         </div>
+        {rows.length === 0 ? <p className="mt-4 text-sm text-muted">Không có kết quả phù hợp.</p> : null}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          loading={loading}
+          onPageChange={goToPage}
+          unitLabel="giao dịch"
+        />
+        </>
       )}
 
       <StaffPaymentEditDialog
         open={editing != null}
         row={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => void load()}
+        onSaved={reload}
       />
     </div>
   );

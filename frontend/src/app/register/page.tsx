@@ -4,8 +4,29 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api/client";
+import { BirthDateInput } from "@/components/BirthDateInput";
+import { AuthSplitLayout } from "@/components/auth/AuthSplitLayout";
+import {
+  AuthAlert,
+  AuthFieldGroup,
+  AuthFooterLink,
+  AuthLabeledInput,
+  AuthLabeledPassword,
+  AuthPageHeader,
+  AuthSubmitButton,
+} from "@/components/auth/AuthFormFields";
+import { authBirthSegmentClass, authGridRowClass, authSelectClass } from "@/components/auth/auth-styles";
+import { IconLock, IconMail, IconUser } from "@/components/auth/AuthIcons";
+import { PhoneNationalInput } from "@/components/PhoneNationalInput";
+import { resolveBirthIsoFromField, validateBirthField } from "@/lib/birth";
 import { formatBirthDdMmYyyy } from "@/lib/dates";
 import type { Gender } from "@/lib/api/types";
+import { isAllowedUserEmail, USER_EMAIL_DOMAIN_MESSAGE } from "@/lib/email";
+import {
+  isValidPhoneDigits,
+  normalizeVietnamMobilePhone,
+  PHONE_VALIDATION_MESSAGE,
+} from "@/lib/phone";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -15,27 +36,34 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [gender, setGender] = useState<Gender>("MALE");
-  const [birth, setBirth] = useState(""); // yyyy-mm-dd from input type=date
+  const [birth, setBirth] = useState("");
+  const [birthFieldError, setBirthFieldError] = useState<string | null>(null);
   const [address, setAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-
-  function setPhoneDigits(value: string) {
-    const digits = value.replace(/\D/g, "").slice(0, 11);
-    setPhone(digits);
-  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setPending(true);
     try {
-      if (phone.length !== 11) {
-        setError("Số điện thoại phải đúng 11 chữ số");
+      if (!isValidPhoneDigits(phone)) {
+        setError(PHONE_VALIDATION_MESSAGE);
         setPending(false);
         return;
       }
-      const birthFormatted = formatBirthDdMmYyyy(birth);
+      if (!isAllowedUserEmail(email.trim())) {
+        setError(USER_EMAIL_DOMAIN_MESSAGE);
+        setPending(false);
+        return;
+      }
+      const birthError = validateBirthField(birth);
+      if (birthError) {
+        setError(birthError);
+        setPending(false);
+        return;
+      }
+      const birthFormatted = formatBirthDdMmYyyy(resolveBirthIsoFromField(birth));
       if (!birthFormatted) {
         setError("Chọn ngày sinh hợp lệ");
         setPending(false);
@@ -50,7 +78,7 @@ export default function RegisterPage() {
             password,
             fullname: fullname.trim(),
             email: email.trim(),
-            phone: phone.trim(),
+            phone: normalizeVietnamMobilePhone(phone),
             gender,
             birth: birthFormatted,
             address: address.trim(),
@@ -67,108 +95,104 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="mx-auto max-w-lg px-4 py-12 sm:px-6">
-      <h1
-        className="font-serif text-3xl font-semibold text-brand-900"
-        style={{ fontFamily: "var(--font-cormorant), serif" }}
-      >
-        Đăng ký khách
-      </h1>
-      <p className="mt-2 text-sm text-muted">Tạo tài khoản để đặt món và đặt bàn khi đến nhà hàng.</p>
+    <AuthSplitLayout wide>
+      <AuthPageHeader
+        title="Đăng ký tài khoản"
+        subtitle="Tạo tài khoản khách để đặt món và đặt bàn tại Bistro."
+      />
 
-      <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-2xl border border-stone-200 bg-surface p-6 shadow-sm">
-        {error ? (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{error}</p>
-        ) : null}
+      <form onSubmit={onSubmit} className="space-y-5">
+        {error ? <AuthAlert variant="error">{error}</AuthAlert> : null}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Tên đăng nhập">
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className={inputClass}
-              required
-              minLength={3}
-              maxLength={50}
-            />
-          </Field>
-          <Field label="Mật khẩu">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className={inputClass}
-              required
-              minLength={6}
-            />
-          </Field>
+        <div className={authGridRowClass}>
+          <AuthLabeledInput
+            id="reg-username"
+            label="Tên đăng nhập"
+            icon={<IconUser className="h-5 w-5" />}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            minLength={3}
+            maxLength={50}
+          />
+          <AuthLabeledPassword
+            id="reg-password"
+            label="Mật khẩu"
+            icon={<IconLock className="h-5 w-5" />}
+            value={password}
+            onChange={setPassword}
+            required
+            minLength={6}
+          />
         </div>
-        <Field label="Họ tên">
-          <input value={fullname} onChange={(e) => setFullname(e.target.value)} className={inputClass} required maxLength={100} />
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Email">
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} required />
-          </Field>
-          <Field label="Điện thoại (11 số)">
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="tel"
-              value={phone}
-              onChange={(e) => setPhoneDigits(e.target.value)}
-              className={inputClass}
-              required
-              minLength={11}
-              maxLength={11}
-              pattern="[0-9]{11}"
-              placeholder=""
-              title="Nhập đúng 11 chữ số"
-            />
-          </Field>
+
+        <AuthLabeledInput
+          id="reg-fullname"
+          label="Họ và tên"
+          value={fullname}
+          onChange={(e) => setFullname(e.target.value)}
+          required
+          maxLength={100}
+        />
+
+        <div className={authGridRowClass}>
+          <AuthLabeledInput
+            id="reg-email"
+            label="Email"
+            icon={<IconMail className="h-5 w-5" />}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <AuthFieldGroup label="Điện thoại">
+            <PhoneNationalInput value={phone} onChange={setPhone} variant="auth" required />
+          </AuthFieldGroup>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Giới tính">
-            <select value={gender} onChange={(e) => setGender(e.target.value as Gender)} className={inputClass}>
+
+        <div className={authGridRowClass}>
+          <AuthFieldGroup label="Giới tính">
+            <select
+              value={gender}
+              onChange={(e) => setGender(e.target.value as Gender)}
+              className={authSelectClass}
+            >
               <option value="MALE">Nam</option>
               <option value="FEMALE">Nữ</option>
             </select>
-          </Field>
-          <Field label="Ngày sinh">
-            <input type="date" value={birth} onChange={(e) => setBirth(e.target.value)} className={inputClass} required />
-          </Field>
+          </AuthFieldGroup>
+          <AuthFieldGroup label="Ngày sinh">
+            <BirthDateInput
+              value={birth}
+              onChange={setBirth}
+              onValidationChange={setBirthFieldError}
+              layout="fill"
+              className={authBirthSegmentClass}
+              required
+            />
+          </AuthFieldGroup>
         </div>
-        <Field label="Địa chỉ">
-          <input value={address} onChange={(e) => setAddress(e.target.value)} className={inputClass} required maxLength={255} />
-        </Field>
 
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded-xl bg-brand-800 py-3 text-sm font-semibold text-white shadow transition hover:bg-brand-900 disabled:opacity-60"
-        >
-          {pending ? "Đang gửi…" : "Đăng ký"}
-        </button>
+        <AuthLabeledInput
+          id="reg-address"
+          label="Địa chỉ"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          required
+          maxLength={255}
+        />
+
+        <AuthSubmitButton pending={pending} pendingLabel="Đang gửi…" disabled={birthFieldError != null}>
+          Đăng ký
+        </AuthSubmitButton>
       </form>
 
-      <p className="mt-6 text-center text-sm text-muted">
+      <AuthFooterLink>
         Đã có tài khoản?{" "}
         <Link href="/login" className="font-semibold text-brand-800 hover:underline">
           Đăng nhập
         </Link>
-      </p>
-    </div>
-  );
-}
-
-const inputClass =
-  "mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-stone-900 shadow-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <span className="block text-sm font-medium text-stone-700">{label}</span>
-      {children}
-    </div>
+      </AuthFooterLink>
+    </AuthSplitLayout>
   );
 }

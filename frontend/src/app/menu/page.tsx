@@ -1,36 +1,43 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { TableNumberSelect } from "@/components/TableNumberSelect";
+import { useCallback, useEffect, useState } from "react";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { useAuth } from "@/context/auth-context";
-import { useRestaurantTables } from "@/hooks/use-restaurant-tables";
+import { useCart } from "@/context/cart-context";
+import { usePaginatedList } from "@/hooks/use-paginated-list";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { MenuItemModel, OrderModel, OrderType, PaginatedResponse } from "@/lib/api/types";
+import type { CategoryModel, MenuItemModel, PaginatedResponse } from "@/lib/api/types";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { btnPrimaryClass, cardClass, fontSerif } from "@/lib/ui/bakery";
 import { formatVnd } from "@/lib/money";
-import { orderRequiresTable } from "@/lib/orders/order-type";
 
-type CartLine = { item: MenuItemModel; quantity: number };
+const AVAILABLE_FILTER = { menuItemStatus: "AVAILABLE" };
 
 export default function MenuPage() {
   const { user, loading: authLoading } = useAuth();
+  const { addItem } = useCart();
   const router = useRouter();
-  const [items, setItems] = useState<MenuItemModel[]>([]);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [loadingMenu, setLoadingMenu] = useState(true);
-  const [cart, setCart] = useState<Record<number, CartLine>>({});
-  const [tableNumber, setTableNumber] = useState<number | "">("");
-  const [orderType, setOrderType] = useState<OrderType>("DINE_IN");
-  const needsTable = orderRequiresTable(orderType);
-  const { tables, loading: tablesLoading, error: tablesError, reload: reloadTables } = useRestaurantTables({
-    enabled: !!user && needsTable,
-    tableStatus: "AVAILABLE",
-    excludeTablesWithPendingOrder: true,
+  const [categories, setCategories] = useState<CategoryModel[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const [loadingCategories, setLoadingCategories] = useState(true);
+
+  const {
+    rows: items,
+    page,
+    totalPages,
+    totalElements,
+    loading: loadingItems,
+    error: itemsError,
+    goToPage,
+    loadInitial,
+    search,
+  } = usePaginatedList<MenuItemModel>({
+    basePath: "/menu-items/filters",
+    pageSize: 9,
+    initialFilters: AVAILABLE_FILTER,
   });
-  const [notes, setNotes] = useState("");
-  const [checkoutMsg, setCheckoutMsg] = useState<string | null>(null);
-  const [checkoutPending, setCheckoutPending] = useState(false);
 
   useEffect(() => {
     if (authLoading) return;
@@ -38,102 +45,43 @@ export default function MenuPage() {
       router.replace("/login?next=/menu");
       return;
     }
+    loadInitial();
     let cancelled = false;
     (async () => {
-      setLoadingMenu(true);
-      setFetchError(null);
+      setLoadingCategories(true);
+      setCategoriesError(null);
       try {
-        const qs = buildPageParams(0, 100, { menuItemStatus: "AVAILABLE" });
-        const res = await apiFetch<PaginatedResponse<MenuItemModel>>(`/menu-items/filters?${qs}`);
-        if (!cancelled) setItems(res.data.content ?? []);
+        const catQs = buildPageParams(0, 100, { categoryStatus: "AVAILABLE" });
+        const catRes = await apiFetch<PaginatedResponse<CategoryModel>>(`/categories/filters?${catQs}`);
+        if (!cancelled) {
+          setCategories(catRes.data.content ?? []);
+        }
       } catch (e) {
-        if (!cancelled)
-          setFetchError(e instanceof ApiError ? e.message : "Không tải được thực đơn");
+        if (!cancelled) {
+          setCategoriesError(e instanceof ApiError ? e.message : "Không tải được danh mục");
+        }
       } finally {
-        if (!cancelled) setLoadingMenu(false);
+        if (!cancelled) setLoadingCategories(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [user, authLoading, router]);
+  }, [user, authLoading, router, loadInitial]);
 
-  useEffect(() => {
-    if (!needsTable) {
-      setTableNumber("");
-      return;
-    }
-    if (tables.length === 0) return;
-    if (tableNumber === "" || !tables.some((t) => t.tableNumber === tableNumber)) {
-      setTableNumber(tables[0].tableNumber);
-    }
-  }, [tables, tableNumber, needsTable]);
+  const addToCart = useCallback((item: MenuItemModel) => addItem(item), [addItem]);
 
-  const addToCart = useCallback((item: MenuItemModel) => {
-    setCart((prev) => {
-      const cur = prev[item.id];
-      const quantity = (cur?.quantity ?? 0) + 1;
-      return { ...prev, [item.id]: { item, quantity } };
-    });
-  }, []);
-
-  const decFromCart = useCallback((id: number) => {
-    setCart((prev) => {
-      const cur = prev[id];
-      if (!cur) return prev;
-      if (cur.quantity <= 1) {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      }
-      return { ...prev, [id]: { ...cur, quantity: cur.quantity - 1 } };
-    });
-  }, []);
-
-  const cartLines = useMemo(() => Object.values(cart), [cart]);
-  const cartTotal = useMemo(() => {
-    let sum = 0;
-    for (const line of cartLines) {
-      sum += Number(line.item.price) * line.quantity;
-    }
-    return sum;
-  }, [cartLines]);
-
-  async function checkout() {
-    if (!user || cartLines.length === 0) return;
-    if (needsTable && (tableNumber === "" || tables.length === 0)) return;
-    setCheckoutMsg(null);
-    setCheckoutPending(true);
-    try {
-      const orderRes = await apiFetch<OrderModel>("/orders", {
-        method: "POST",
-        body: JSON.stringify({
-          ...(needsTable ? { tableNumber } : {}),
-          orderType,
-          notes: notes.trim() || undefined,
-        }),
-      });
-      const orderNumber = orderRes.data.orderNumber;
-      const payloads = cartLines.map((line) => ({
-        orderNumber,
-        menuItemName: line.item.name,
-        quantity: line.quantity,
-      }));
-      await apiFetch<unknown[]>("/order-items", {
-        method: "POST",
-        body: JSON.stringify(payloads),
-      });
-      setCart({});
-      setNotes("");
-      setCheckoutMsg(`Đã tạo đơn ${orderNumber}. Bạn có thể gửi bếp từ trang Đơn hàng.`);
-      void reloadTables();
-    } catch (e) {
-      setCheckoutMsg(e instanceof ApiError ? e.message : "Thanh toán giỏ thất bại");
-      void reloadTables();
-    } finally {
-      setCheckoutPending(false);
+  function selectCategory(name: string | null) {
+    setSelectedCategory(name);
+    if (name) {
+      search({ ...AVAILABLE_FILTER, categoryName: name });
+    } else {
+      search(AVAILABLE_FILTER);
     }
   }
+
+  const fetchError = itemsError ?? categoriesError;
+  const loadingMenu = loadingCategories || (loadingItems && items.length === 0);
 
   if (authLoading || !user) {
     return (
@@ -144,160 +92,182 @@ export default function MenuPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:grid lg:grid-cols-[1fr_340px] lg:gap-10">
-      <div>
-        <h1
-          className="font-serif text-3xl font-semibold text-brand-900"
-          style={{ fontFamily: "var(--font-cormorant), serif" }}
-        >
-          Thực đơn
-        </h1>
+    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <PageHeading
+        title="Thực đơn"
+        subtitle="Chọn món yêu thích và thêm vào giỏ — giao diện thẻ sản phẩm ấm áp, dễ duyệt."
+      />
 
-        {fetchError ? (
-          <p className="mt-6 rounded-xl bg-red-50 p-4 text-sm text-red-800 ring-1 ring-red-100">{fetchError}</p>
-        ) : null}
+      {fetchError ? (
+        <p className="mt-6 rounded-xl bg-red-50 p-4 text-sm text-red-800 ring-1 ring-red-100">{fetchError}</p>
+      ) : null}
 
-        {loadingMenu ? (
-          <p className="mt-10 text-muted">Đang tải món…</p>
-        ) : (
-          <ul className="mt-8 grid gap-6 sm:grid-cols-2">
-            {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex gap-4 overflow-hidden rounded-2xl border border-stone-200 bg-surface p-4 shadow-sm transition hover:shadow-md"
+      {loadingMenu ? (
+        <p className="mt-10 text-muted">Đang tải món…</p>
+      ) : (
+        <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start">
+          <aside className="w-full shrink-0 lg:w-60 xl:w-64">
+            <div className={`${cardClass} p-3 lg:sticky lg:top-24 lg:p-4`}>
+              <p className="mb-3 hidden px-1 text-xs font-semibold uppercase tracking-wide text-muted lg:block">
+                Danh mục
+              </p>
+              <nav
+                className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0"
+                aria-label="Danh mục món"
               >
-                <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-stone-100">
-                  {item.image?.startsWith("http") ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={item.image} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-muted">Ảnh</div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-accent">{item.categoryName}</p>
-                  <h2 className="mt-0.5 font-semibold text-stone-900">{item.name}</h2>
-                  {item.description ? (
-                    <p className="mt-1 line-clamp-2 text-sm text-muted">{item.description}</p>
-                  ) : null}
-                  <p className="mt-2 text-lg font-semibold text-brand-800">{formatVnd(item.price)}</p>
-                  <button
-                    type="button"
-                    onClick={() => addToCart(item)}
-                    className="mt-2 rounded-lg bg-brand-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-900"
-                  >
-                    Thêm vào giỏ
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                <CategorySidebarItem
+                  label="Tất cả món"
+                  active={selectedCategory === null}
+                  onClick={() => selectCategory(null)}
+                  variant="all"
+                />
+                {categories.map((cat) => (
+                  <CategorySidebarItem
+                    key={cat.id}
+                    label={cat.name}
+                    image={cat.image}
+                    active={selectedCategory === cat.name}
+                    onClick={() => selectCategory(cat.name)}
+                  />
+                ))}
+              </nav>
+            </div>
+          </aside>
 
-      <aside className="mt-10 lg:mt-0">
-        <div className="sticky top-24 space-y-4 rounded-2xl border border-stone-200 bg-surface p-5 shadow-sm">
-          <h2 className="font-serif text-xl font-semibold text-brand-900" style={{ fontFamily: "var(--font-cormorant), serif" }}>
-            Giỏ hàng
-          </h2>
-          {cartLines.length === 0 ? (
-            <p className="text-sm text-muted">Chưa có món. Hãy thêm từ danh sách bên trái.</p>
-          ) : (
-            <ul className="max-h-64 space-y-3 overflow-y-auto text-sm">
-              {cartLines.map((line) => (
-                <li key={line.item.id} className="flex items-center justify-between gap-2 border-b border-stone-100 pb-2">
-                  <span className="min-w-0 truncate font-medium">{line.item.name}</span>
-                  <span className="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                      onClick={() => decFromCart(line.item.id)}
-                    >
-                      −
-                    </button>
-                    <span className="w-6 text-center">{line.quantity}</span>
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                      onClick={() => addToCart(line.item)}
-                    >
-                      +
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <main className="min-w-0 flex-1">
 
-          <p className="text-sm font-semibold text-stone-800">
-            Tạm tính: <span className="text-brand-800">{formatVnd(cartTotal)}</span>
-          </p>
-
-          <div className="space-y-2 border-t border-stone-100 pt-4">
-            <label className="block text-xs font-medium text-stone-600">Loại đơn</label>
-            <select
-              value={orderType}
-              onChange={(e) => setOrderType(e.target.value as OrderType)}
-              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-600/25"
-            >
-              <option value="DINE_IN">Tại chỗ</option>
-              <option value="DELIVERY">Giao hàng</option>
-            </select>
-            {needsTable ? (
-              <TableNumberSelect
-                id="cart-table"
-                value={tableNumber}
-                onChange={setTableNumber}
-                tables={tables}
-                loading={tablesLoading}
-                error={tablesError}
-                emptyHint="Không còn bàn trống. Vui lòng quay lại sau ít phút nữa."
-              />
+            {items.length === 0 ? (
+              <p className="rounded-xl bg-stone-50 px-4 py-8 text-center text-sm text-muted ring-1 ring-stone-200">
+                {selectedCategory
+                  ? `Chưa có món trong danh mục «${selectedCategory}».`
+                  : "Hiện chưa có món nào."}
+              </p>
             ) : (
-              <p className="text-xs text-stone-500">Đơn giao hàng không cần chọn bàn.</p>
+              <ul className="grid gap-8 sm:grid-cols-2 xl:grid-cols-3">
+                {items.map((item) => (
+                  <li
+                    key={item.id}
+                    className={`${cardClass} group flex flex-col overflow-hidden transition hover:-translate-y-0.5`}
+                  >
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-brand-50">
+                      {item.image?.startsWith("http") ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-muted">Ảnh món</div>
+                      )}
+                    </div>
+                    <div className="flex flex-1 flex-col p-5">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                        {item.categoryName}
+                      </p>
+                      <h2 className="mt-1 font-serif text-lg font-semibold text-brand-900" style={fontSerif}>
+                        {item.name}
+                      </h2>
+                      {item.description ? (
+                        <p className="mt-2 line-clamp-2 flex-1 text-sm leading-relaxed text-muted">
+                          {item.description}
+                        </p>
+                      ) : (
+                        <div className="flex-1" />
+                      )}
+                      <div className="mt-4 flex items-center justify-between gap-3 border-t border-brand-50 pt-4">
+                        <p className="text-lg font-semibold text-brand-800">{formatVnd(item.price)}</p>
+                        <button type="button" onClick={() => addToCart(item)} className={btnPrimaryClass}>
+                          Thêm
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
-            <label className="block text-xs font-medium text-stone-600">Ghi chú</label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              maxLength={300}
-              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-600/25"
-              placeholder="Ít cay, không hành…"
-            />
-          </div>
 
-          {checkoutMsg ? (
-            <p
-              className={`rounded-lg px-3 py-2 text-sm ${
-                checkoutMsg.startsWith("Đã tạo")
-                  ? "bg-emerald-50 text-emerald-900 ring-1 ring-emerald-100"
-                  : "bg-red-50 text-red-800 ring-1 ring-red-100"
-              }`}
-            >
-              {checkoutMsg}{" "}
-              {checkoutMsg.startsWith("Đã tạo") ? (
-                <Link href="/orders" className="font-semibold underline">
-                  Xem đơn
-                </Link>
-              ) : null}
-            </p>
-          ) : null}
-
-          <button
-            type="button"
-            disabled={
-              cartLines.length === 0 ||
-              checkoutPending ||
-              (needsTable && (tableNumber === "" || tables.length === 0 || tablesLoading))
-            }
-            onClick={() => void checkout()}
-            className="w-full rounded-xl bg-brand-800 py-3 text-sm font-semibold text-white shadow transition hover:bg-brand-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {checkoutPending ? "Đang tạo đơn…" : "Đặt món"}
-          </button>
+            {!loadingItems && totalElements > 0 ? (
+              <PaginationBar
+                page={page}
+                totalPages={totalPages}
+                totalElements={totalElements}
+                loading={loadingItems}
+                onPageChange={goToPage}
+                unitLabel="món"
+              />
+            ) : null}
+          </main>
         </div>
-      </aside>
+      )}
     </div>
+  );
+}
+
+function CategorySidebarItem({
+  label,
+  image,
+  active,
+  onClick,
+  variant = "category",
+}: {
+  label: string;
+  image?: string;
+  active: boolean;
+  onClick: () => void;
+  variant?: "all" | "category";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      className={`group flex min-w-[11rem] shrink-0 items-center gap-3 rounded-2xl px-2.5 py-2 text-left transition lg:min-w-0 lg:w-full lg:px-3 lg:py-2.5 ${
+        active
+          ? "bg-brand-800 text-white shadow-sm lg:border-l-0"
+          : "hover:bg-brand-50 lg:hover:ring-1 lg:hover:ring-brand-100"
+      }`}
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-stone-100 ring-1 ring-stone-200/80">
+        {variant === "all" ? (
+          <AllCategoriesIcon active={active} />
+        ) : image?.startsWith("http") ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={image} alt={label} className="h-full w-full object-cover" />
+        ) : (
+          <span
+            className={`flex h-full w-full items-center justify-center text-sm font-semibold ${
+              active ? "bg-brand-100 text-brand-800" : "bg-stone-200/80 text-stone-500"
+            }`}
+          >
+            {label.charAt(0).toUpperCase()}
+          </span>
+        )}
+      </span>
+      <span
+        className={`line-clamp-2 text-sm font-medium leading-snug ${
+          active ? "text-white" : "text-brand-800 group-hover:text-brand-900"
+        }`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function AllCategoriesIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      className={`h-6 w-6 ${active ? "text-brand-800" : "text-stone-500"}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden
+    >
+      <path strokeLinecap="round" d="M4 6h7M4 12h16M4 18h11" />
+      <circle cx="17" cy="6" r="2" fill="currentColor" stroke="none" opacity={active ? 1 : 0.45} />
+      <circle cx="20" cy="18" r="2" fill="currentColor" stroke="none" opacity={active ? 1 : 0.45} />
+    </svg>
   );
 }

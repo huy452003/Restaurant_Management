@@ -74,7 +74,6 @@ Trạng thái ca làm việc
 Trạng thái đặt bàn
 - `PENDING` - Chờ xác nhận
 - `CONFIRMED` - Đã xác nhận
-- `SEATED` - Đã ngồi
 - `CANCELLED` - Đã hủy
 - `NO_SHOW` - Không đến
 

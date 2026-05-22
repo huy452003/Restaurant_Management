@@ -115,7 +115,8 @@ CREATE TABLE reservations (
     customer_phone VARCHAR(15) NOT NULL,
     customer_email VARCHAR(50) NOT NULL,
     table_number INTEGER NOT NULL,
-    reservation_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reservation_date DATE NOT NULL,
+    reservation_time TIME NOT NULL,
     number_of_guests INTEGER NOT NULL,
     reservation_status VARCHAR(50) NOT NULL,
     special_request VARCHAR(300),
@@ -164,7 +165,7 @@ CREATE INDEX idx_payments_order_status ON payments(order_id, payment_status);
 CREATE INDEX idx_payments_cashier_status ON payments(cashier_id, payment_status);
 CREATE INDEX idx_payments_paid_at ON payments(paid_at);
 
-CREATE INDEX idx_reservations_table_status_ts ON reservations(table_number, reservation_status, reservation_ts);
+CREATE INDEX idx_reservations_table_date_time_status ON reservations(table_number, reservation_date, reservation_time, reservation_status);
 CREATE INDEX idx_reservations_customer_email_status ON reservations(customer_email, reservation_status);
 CREATE INDEX idx_reservations_customer_phone_status ON reservations(customer_phone, reservation_status);
 

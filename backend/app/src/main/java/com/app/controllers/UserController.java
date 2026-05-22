@@ -30,6 +30,7 @@ import com.logging.services.LoggingService;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import com.common.models.user.LoginRequestModel;
@@ -39,6 +40,7 @@ import com.common.models.user.UpdateUserNormalModel;
 import com.common.models.user.UserModel;
 import com.common.models.user.UserLoginModel;
 import com.common.models.user.UserRegisterModel;
+import com.common.models.user.UserUpdatePasswordRequestModel;
 import com.common.models.PaginatedResponse;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
@@ -237,6 +239,33 @@ public class UserController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    // update password by customer - chỉ CUSTOMER
+    @PatchMapping("/{userId}/password")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "updatePasswordByCustomerFallback")
+    public ResponseEntity<Response<UserModel>> updatePasswordByCustomer(
+        Locale locale,
+        @RequestBody @Valid UserUpdatePasswordRequestModel update,
+        @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer userId
+    ){
+        LogContext logContext = getLogContext(
+            "updatePasswordByCustomer", 
+            Collections.singletonList(userId)
+        );
+        log.logInfo("is running, preparing to call service ...!", logContext);
+
+        UserModel updatedUser = userService.updatePasswordByCustomer(update, userId);
+        Response<UserModel> response = new Response<>(
+            200,
+            messageSource.getMessage("response.message.updatePasswordByCustomerSuccess", null, locale),
+            "UserModel",
+            null,
+            updatedUser
+        );
+        log.logInfo("completed, returning response ...!", logContext);
+        return ResponseEntity.status(response.statusCode()).body(response);
+    }
     
     // verify and activate user - public
     @PutMapping("/public/verify")
@@ -265,12 +294,12 @@ public class UserController {
     @RateLimiter(name = "restaurant-management-write-controller", fallbackMethod = "resendVerificationTokenFallback")
     public ResponseEntity<Response<String>> resendVerificationToken(
         Locale locale,
-        @RequestParam @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer userId
+        @RequestParam @NotBlank(message = "validate.user.email.required") String email
     ) {
-        LogContext logContext = getLogContext("resendVerificationToken", Collections.singletonList(userId));
+        LogContext logContext = getLogContext("resendVerificationToken", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        String verificationToken = userService.resendVerificationToken(userId);
+        String verificationToken = userService.resendVerificationToken(email);
         Response<String> response = new Response<>(
             200,
             messageSource.getMessage("response.message.resendVerificationTokenSuccess", null, locale),
@@ -413,6 +442,27 @@ public class UserController {
         throw error;
     }
     
+    // updatePasswordByCustomerFallback
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<UserModel>> updatePasswordByCustomerFallback(
+        Locale locale, UserUpdatePasswordRequestModel update, Integer userId, Exception e
+    ) {
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        if (!isRateLimitException(e)) {
+            throw new RuntimeException(e);
+        }
+        
+        // Chỉ trả 429 khi thật sự bị rate limit
+        TooManyRequestsExceptionHandle error = new TooManyRequestsExceptionHandle(
+            e != null && e.getMessage() != null ? e.getMessage() : "Rate limit exceeded for updatePasswordByCustomer endpoint", 
+            "updatePasswordByCustomer"
+        );
+        throw error;
+    }
+    
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
     private ResponseEntity<Response<UserModel>> verifyAndActivateFallback(
@@ -437,7 +487,7 @@ public class UserController {
     // resendVerificationTokenFallback
     @SuppressWarnings("unused")
     private ResponseEntity<Response<String>> resendVerificationTokenFallback(
-        Locale locale, Integer userId, Exception e
+        Locale locale, String email, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {

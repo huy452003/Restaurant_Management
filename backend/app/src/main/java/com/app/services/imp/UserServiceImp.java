@@ -1,5 +1,6 @@
 package com.app.services.imp;
 
+import com.app.services.PendingUserRegistrationStore;
 import com.app.services.UserService;
 import com.app.utils.UserEntityUtils;
 
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.ArrayList;
 
@@ -40,12 +42,15 @@ import com.common.models.user.UpdateUserForAdminModel;
 import com.common.models.user.UpdateUserNormalModel;
 import com.common.models.user.UserModel;
 import com.common.models.user.UserLoginModel;
+import com.common.models.user.PendingUserRegistration;
 import com.common.models.user.UserRegisterModel;
+import com.common.models.user.UserUpdatePasswordRequestModel;
 import com.common.repositories.UserRepository;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
 import com.common.entities.UserEntity;
 import com.common.utils.AgeUtils;
+import com.common.utils.VietnamMobilePhoneUtils;
 import com.common.utils.FilterPageCacheFacade;
 import com.common.enums.Gender;
 import com.common.specifications.FilterCondition;
@@ -89,6 +94,8 @@ public class UserServiceImp implements UserService {
     private ObjectMapper objectMapper;
     @Autowired
     private BlackListService blackListService;
+    @Autowired
+    private PendingUserRegistrationStore pendingUserRegistrationStore;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds){
         return LogContext.builder()
@@ -254,16 +261,13 @@ public class UserServiceImp implements UserService {
         log.logInfo("Completed, logged out user: " + currentUser.getUsername() + " and blacklisted token", logContext);
     }
 
-    // create users
+    // create users — lưu tạm Redis; chỉ ghi DB khi verify
     @Override
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "createsFallback")
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
-    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<UserRegisterModel> creates(List<RegisterRequestModel> registers) {
         LogContext logContext = getLogContext("creates", Collections.emptyList());
-        log.logInfo("Creating " + registers.size() + " users ...!", logContext);
+        log.logInfo("Staging " + registers.size() + " registration(s) in Redis ...!", logContext);
 
-        // Check nếu có user muốn tạo ADMIN role nhưng đã có ADMIN trong hệ thống
         boolean hasAdminInSystem = userRepository.existsByRole(UserRole.ADMIN);
         for (RegisterRequestModel register : registers) {
             if (register.getRole().equals(UserRole.ADMIN) && hasAdminInSystem) {
@@ -277,78 +281,91 @@ public class UserServiceImp implements UserService {
             }
         }
 
-        // Kiểm tra trùng lặp trước khi lưu (normalize input để so sánh với data đã normalize trong DB)
         List<Object> conflicts = new ArrayList<>();
         for (RegisterRequestModel register : registers) {
-            // Normalize input
             register.setUsername(register.getUsername().toLowerCase().trim());
             register.setEmail(register.getEmail().toLowerCase().trim());
-            
-            if (userRepository.existsByUsername(register.getUsername())) {
-                Map<String, Object> conflict = new HashMap<>();
-                conflict.put("field", "username");
-                conflict.put("value", register.getUsername());
-                conflict.put("message", "Username already exists");
-                conflicts.add(conflict);
-            }
-            if (userRepository.existsByEmail(register.getEmail())) {
-                Map<String, Object> conflict = new HashMap<>();
-                conflict.put("field", "email");
-                conflict.put("value", register.getEmail());
-                conflict.put("message", "Email already exists");
-                conflicts.add(conflict);
-            }
-            if (userRepository.existsByPhone(register.getPhone())) {
-                Map<String, Object> conflict = new HashMap<>();
-                conflict.put("field", "phone");
-                conflict.put("value", register.getPhone());
-                conflict.put("message", "Phone already exists");
-                conflicts.add(conflict);
-            }
+            register.setPhone(VietnamMobilePhoneUtils.normalize(register.getPhone()));
+
+            addRegistrationConflict(
+                conflicts, "username", register.getUsername(),
+                userRepository.existsByUsername(register.getUsername()),
+                pendingUserRegistrationStore.existsByUsername(register.getUsername()),
+                "Username already exists",
+                "Username is pending verification"
+            );
+
+            addRegistrationConflict(
+                conflicts, "email", register.getEmail(),
+                userRepository.existsByEmail(register.getEmail()),
+                pendingUserRegistrationStore.existsByEmail(register.getEmail()),
+                "Email already exists",
+                "Email is pending verification"
+            );
+
+            addRegistrationConflict(
+                conflicts, "phone", register.getPhone(),
+                userRepository.existsByPhone(register.getPhone()),
+                pendingUserRegistrationStore.existsByPhone(register.getPhone()),
+                "Phone already exists",
+                "Phone is pending verification"
+            );
         }
-        
+
         if (!conflicts.isEmpty()) {
             ConflictExceptionHandle e = new ConflictExceptionHandle(
                 "Duplicate unique fields detected",
                 conflicts,
                 "UserRegisterModel"
             );
-            log.logError("Thrown an exception when create users", e, logContext);
+            log.logError("Thrown an exception when staging registrations", e, logContext);
             throw e;
         }
 
-        // chuyển đổi từ models sang entities để save vào db
-        List<UserEntity> userEntities = registers.stream().map(register -> {
-            UserEntity userEntity = modelMapper.map(register, UserEntity.class);
-            userEntity.setPassword(passwordEncoder.encode(register.getPassword()));
-            if (userEntity.getUserStatus() == null) {
-                userEntity.setUserStatus(UserStatus.PENDING);
-            }
-            return userEntity;
-        }).collect(Collectors.toList());
-    
-        userRepository.saveAll(userEntities);   
+        List<UserRegisterModel> results = new ArrayList<>();
+        for (RegisterRequestModel register : registers) {
+            String registrationId = UUID.randomUUID().toString();
+            PendingUserRegistration pending = new PendingUserRegistration(
+                registrationId,
+                register.getUsername(),
+                passwordEncoder.encode(register.getPassword()),
+                register.getFullname(),
+                register.getEmail(),
+                register.getPhone(),
+                register.getGender(),
+                register.getBirth(),
+                register.getAddress(),
+                register.getRole()
+            );
+            pendingUserRegistrationStore.save(pending);
 
-        // xóa cache filter
-        FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
-        log.logInfo("Deleted filter caches after create", logContext);
-        
-        log.logInfo("completed, created " + userEntities.size() + " users with PENDING status", logContext);
-        return userEntities.stream().map(userEntity -> {
-            UserRegisterModel userRegisterModel = modelMapper.map(userEntity, UserRegisterModel.class);
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("role", userEntity.getRole().name());
-            userRegisterModel.setAccessToken(jwtService.generateAccessToken(claims, userEntity));
-            userRegisterModel.setExpires(formatExpirationTime(jwtConfig.expiration()));
-            userRegisterModel.setRefreshToken(jwtService.generateRefreshToken(claims, userEntity));
-            userRegisterModel.setRefreshExpires(formatExpirationTime(jwtConfig.refreshExpiration()));
-            userRegisterModel.setVerificationToken(jwtService.generateVerificationToken(userEntity.getId()));
+            UserRegisterModel userRegisterModel = modelMapper.map(register, UserRegisterModel.class);
+            userRegisterModel.setUserStatus(UserStatus.PENDING);
+            userRegisterModel.setVerificationToken(jwtService.generateVerificationToken(registrationId));
             userRegisterModel.setVerificationTokenExpires(formatExpirationTime(jwtConfig.verificationExpiration()));
-            if (userEntity.getBirth() != null) {
-                userRegisterModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
+            if (register.getBirth() != null) {
+                userRegisterModel.setAge(AgeUtils.calculateAge(register.getBirth()));
             }
-            return userRegisterModel;
-        }).collect(Collectors.toList());
+            results.add(userRegisterModel);
+        }
+
+        log.logInfo("completed, staged " + results.size() + " registration(s) in Redis", logContext);
+        return results;
+    }
+
+    private void addRegistrationConflict(
+        List<Object> conflicts, String field, String value,
+        boolean existsInDb, boolean existsInRedis, String dbMessage,
+        String pendingMessage
+    ) {
+        if (!existsInDb && !existsInRedis) {
+            return;
+        }
+        Map<String, Object> conflict = new HashMap<>();
+        conflict.put("field", field);
+        conflict.put("value", value);
+        conflict.put("message", existsInDb ? dbMessage : pendingMessage);
+        conflicts.add(conflict);
     }
 
     // update user normal - user tự update thông tin của chính mình
@@ -368,9 +385,9 @@ public class UserServiceImp implements UserService {
             userId, "UserModel", logContext, log
         );
 
-        // Normalize email
         update.setEmail(update.getEmail().toLowerCase().trim());
-        
+        update.setPhone(VietnamMobilePhoneUtils.normalize(update.getPhone()));
+
         // Kiểm tra trùng lặp trước khi cập nhật
         List<Object> conflicts = new ArrayList<>();
         
@@ -485,9 +502,9 @@ public class UserServiceImp implements UserService {
             UpdateUserForAdminModel update = updates.get(i);
             UserEntity currentUser = foundUsers.get(i);
 
-            // Normalize username và email
             update.setUsername(update.getUsername().toLowerCase().trim());
             update.setEmail(update.getEmail().toLowerCase().trim());
+            update.setPhone(VietnamMobilePhoneUtils.normalize(update.getPhone()));
 
             if(!Objects.equals(update.getUsername(), currentUser.getUsername())){
                 if(userRepository.existsByUsername(update.getUsername())){
@@ -579,42 +596,130 @@ public class UserServiceImp implements UserService {
         ).collect(Collectors.toList());
     }
 
+    // update password by customer
+    @Override
+    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatePasswordByCustomerFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
+    public UserModel updatePasswordByCustomer(UserUpdatePasswordRequestModel update, Integer userId) {
+        LogContext logContext = getLogContext("updatePasswordByCustomer", Collections.singletonList(userId));
+        log.logInfo("User with id " + userId + " is updating their password ...!", logContext);
+
+        // lấy user đang đăng nhập
+        UserEntity currentUser = userEntityUtils.requireAuthenticatedUserById(
+            userId, "UserModel", logContext, log
+        );
+
+        // kiểm tra mật khẩu cũ phải giống với mật khẩu hiện tại
+        if(!passwordEncoder.matches(update.getOldPassword(), currentUser.getPassword())){
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "Old password is incorrect",
+                Collections.singletonList(userId),
+                "UserModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+
+        // mật khẩu mới và xác nhận phải trùng nhau
+        if (!Objects.equals(update.getNewPassword(), update.getConfirmNewPassword())) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "New password and confirm password do not match",
+                Collections.singletonList(userId),
+                "UserModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+
+        // kiểm tra mật khẩu mới phải khác với mật khẩu hiện tại
+        if(passwordEncoder.matches(update.getNewPassword(), currentUser.getPassword())){
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "New password is the same as the old password",
+                Collections.singletonList(userId),
+                "UserModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+
+        currentUser.setPassword(passwordEncoder.encode(update.getNewPassword()));
+        userRepository.save(currentUser);
+        log.logInfo("completed, updated password for user with id: " + userId, logContext);
+        return toUserModel(currentUser);
+    }
+
     // verify and activate user
     @Override
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "verifyAndActivateFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel verifyAndActivate(String verificationToken) {
-        Integer userId = jwtService.extractUserIdFromVerificationToken(verificationToken);
-        LogContext logContext = getLogContext(
-            "verifyAndActivate", 
-            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
-        );
-        log.logInfo("Verifying user with verification token ...!", logContext);
+        String registrationId = jwtService.extractRegistrationIdFromVerificationToken(verificationToken);
+        LogContext logContext = getLogContext("verifyAndActivate", Collections.emptyList());
+        log.logInfo("Verifying registration id=" + registrationId, logContext);
 
-        UserEntity userEntity = userEntityUtils.requireById(userId, "userModel", logContext, log);
-
-        // Kiểm tra status phải là PENDING
-        if (userEntity.getUserStatus() != UserStatus.PENDING) {
+        PendingUserRegistration pending = pendingUserRegistrationStore.findByRegistrationId(registrationId);
+        if (pending == null) {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "User is not in PENDING status. Current status: " + userEntity.getUserStatus(),
-                Collections.singletonList(userId),
+                "Registration not found or expired. Please register again.",
+                Collections.singletonList(registrationId),
                 "userModel"
             );
-            log.logError("User status is not PENDING", e, logContext);
+            log.logError(e.getMessage(), null, logContext);
             throw e;
         }
 
-        // Activate user sau khi verify thành công
+        List<Object> conflicts = new ArrayList<>();
+        if (userRepository.existsByUsername(pending.getUsername())) {
+            Map<String, Object> conflict = new HashMap<>();
+            conflict.put("field", "username");
+            conflict.put("value", pending.getUsername());
+            conflict.put("message", "Username already exists");
+            conflicts.add(conflict);
+        }
+        if (userRepository.existsByEmail(pending.getEmail())) {
+            Map<String, Object> conflict = new HashMap<>();
+            conflict.put("field", "email");
+            conflict.put("value", pending.getEmail());
+            conflict.put("message", "Email already exists");
+            conflicts.add(conflict);
+        }
+        if (userRepository.existsByPhone(pending.getPhone())) {
+            Map<String, Object> conflict = new HashMap<>();
+            conflict.put("field", "phone");
+            conflict.put("value", pending.getPhone());
+            conflict.put("message", "Phone already exists");
+            conflicts.add(conflict);
+        }
+        if (!conflicts.isEmpty()) {
+            pendingUserRegistrationStore.delete(pending);
+            ConflictExceptionHandle e = new ConflictExceptionHandle(
+                "Cannot activate registration due to duplicate fields",
+                conflicts,
+                "userModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+
+        UserEntity userEntity = new UserEntity();
+        userEntity.setUsername(pending.getUsername());
+        userEntity.setPassword(pending.getEncodedPassword());
+        userEntity.setFullname(pending.getFullname());
+        userEntity.setEmail(pending.getEmail());
+        userEntity.setPhone(pending.getPhone());
+        userEntity.setGender(pending.getGender());
+        userEntity.setBirth(pending.getBirth());
+        userEntity.setAddress(pending.getAddress());
+        userEntity.setRole(pending.getRole());
         userEntity.setUserStatus(UserStatus.ACTIVE);
         userRepository.save(userEntity);
 
-        // xóa cache filter
+        pendingUserRegistrationStore.delete(pending);
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);
-        log.logInfo("Deleted filter caches after verify and activate", logContext);
-        
-        log.logInfo("User verified and activated successfully", logContext);
-        
+        log.logInfo("User verified and activated successfully, id=" + userEntity.getId(), logContext);
+
         return toUserModel(userEntity);
     }
 
@@ -623,25 +728,36 @@ public class UserServiceImp implements UserService {
     @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "resendVerificationTokenFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
-    public String resendVerificationToken(Integer userId) {
-        LogContext logContext = getLogContext(
-            "resendVerificationToken",
-            userId != null ? Collections.singletonList(userId) : Collections.emptyList()
-        );
-        log.logInfo("Resending verification token to user ...!", logContext);
+    public String resendVerificationToken(String email) {
+        String normalizedEmail = email.toLowerCase().trim();
+        LogContext logContext = getLogContext("resendVerificationToken", Collections.emptyList());
+        log.logInfo("Resending verification token for email=" + normalizedEmail, logContext);
 
-        UserEntity userEntity = userEntityUtils.requireById(userId, "userModel", logContext, log);
-        if (userEntity.getUserStatus() != UserStatus.PENDING) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "User is not in PENDING status. Current status: " + userEntity.getUserStatus(),
-                Collections.singletonList(userId),
+        String registrationId = pendingUserRegistrationStore.findRegistrationIdByEmail(normalizedEmail);
+        if (registrationId == null) {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Pending registration not found or expired for email: " + normalizedEmail,
+                Collections.singletonList(normalizedEmail),
                 "userModel"
             );
-            log.logError(e.getMessage(), e, logContext);
+            log.logError(e.getMessage(), null, logContext);
             throw e;
         }
-        String verificationToken = jwtService.generateVerificationToken(userId);
-        log.logInfo("completed, resended verification token to user: " + userId, logContext);
+
+        PendingUserRegistration pending = pendingUserRegistrationStore.findByRegistrationId(registrationId);
+        if (pending == null) {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Pending registration not found or expired for email: " + normalizedEmail,
+                Collections.singletonList(normalizedEmail),
+                "userModel"
+            );
+            log.logError(e.getMessage(), null, logContext);
+            throw e;
+        }
+
+        pendingUserRegistrationStore.refreshTtl(pending);
+        String verificationToken = jwtService.generateVerificationToken(registrationId);
+        log.logInfo("completed, resent verification token for registration: " + registrationId, logContext);
         return verificationToken;
     }
 
@@ -787,6 +903,27 @@ public class UserServiceImp implements UserService {
         throw error;
     }
 
+    // updatePasswordByCustomerFallback
+    @SuppressWarnings("unused")
+    private UserModel updatePasswordByCustomerFallback(
+        UserUpdatePasswordRequestModel update, Integer userId, Exception e
+    ) {
+        // Re-throw business exceptions để exception handler xử lý đúng
+        if (isBusinessException(e)) {
+            throw (RuntimeException) e;
+        }
+        if (!isCircuitBreakerOpen(e)) {
+            throw new RuntimeException(e);
+        }
+        
+        // Chỉ trả 503 khi circuit breaker thực sự open
+        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
+            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatePasswordByCustomer service", 
+            "updatePasswordByCustomer"
+        );
+        throw error;
+    }
+
     // verifyAndActivateFallback
     @SuppressWarnings("unused")
     private UserModel verifyAndActivateFallback(
@@ -811,7 +948,7 @@ public class UserServiceImp implements UserService {
     // resendVerificationTokenFallback
     @SuppressWarnings("unused")
     private String resendVerificationTokenFallback(
-        Integer userId, Exception e
+        String email, Exception e
     ) {
         // Re-throw business exceptions để exception handler xử lý đúng
         if (isBusinessException(e)) {

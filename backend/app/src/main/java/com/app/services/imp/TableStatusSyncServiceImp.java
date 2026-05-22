@@ -1,8 +1,6 @@
 package com.app.services.imp;
 
-import java.util.Arrays;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,9 +10,8 @@ import org.springframework.stereotype.Service;
 import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderTableHoldUtils;
 import com.common.entities.TableEntity;
-import com.common.enums.OrderStatus;
-import com.common.enums.ReservationStatus;
 import com.common.enums.TableStatus;
+import com.common.utils.ReservationHoldUtils;
 import com.common.repositories.OrderRepository;
 import com.common.repositories.ReservationRepository;
 import com.common.repositories.TableRepository;
@@ -22,19 +19,10 @@ import com.common.utils.FilterPageCacheFacade;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
-import java.time.LocalDateTime;
-
 @Service
 public class TableStatusSyncServiceImp implements TableStatusSyncService {
 
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
-    private static final long NEAR_RESERVATION_WINDOW_MINUTES = 30L;
-
-    private static final List<ReservationStatus> NEAR_ACTIVE_RESERVATION_STATUSES = Arrays.asList(
-        ReservationStatus.PENDING,
-        ReservationStatus.CONFIRMED,
-        ReservationStatus.SEATED
-    );
 
     @Autowired
     private OrderRepository orderRepository;
@@ -78,26 +66,22 @@ public class TableStatusSyncServiceImp implements TableStatusSyncService {
     }
 
     private TableStatus resolveTargetStatus(Integer tableNumber, Integer excludeReservationId) {
-        if (orderRepository.existsByTable_TableNumberAndOrderStatusIn(
-            tableNumber, OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES
+        if (orderRepository.existsActiveHoldingOrderOnTable(
+            tableNumber, OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES, null
         )) {
             return TableStatus.OCCUPIED;
         }
-        if (hasNearActiveReservation(tableNumber, excludeReservationId)) {
+        if (hasActiveReservationOnTable(tableNumber, excludeReservationId)) {
             return TableStatus.RESERVED;
         }
         return TableStatus.AVAILABLE;
     }
 
-    private boolean hasNearActiveReservation(Integer tableNumber, Integer excludeReservationId) {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime windowStart = now.minusMinutes(NEAR_RESERVATION_WINDOW_MINUTES);
-        LocalDateTime windowEnd = now.plusMinutes(NEAR_RESERVATION_WINDOW_MINUTES);
-        return reservationRepository.existsActiveReservationInWindow(
+    /** PENDING/CONFIRMED trên bàn → RESERVED (khóa bàn cho vận hành, không chỉ cửa sổ ±30 phút). */
+    private boolean hasActiveReservationOnTable(Integer tableNumber, Integer excludeReservationId) {
+        return reservationRepository.existsActiveReservationOnTable(
             tableNumber,
-            windowStart,
-            windowEnd,
-            NEAR_ACTIVE_RESERVATION_STATUSES,
+            ReservationHoldUtils.ACTIVE_HOLD_STATUSES,
             excludeReservationId
         );
     }

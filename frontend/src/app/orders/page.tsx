@@ -1,53 +1,72 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { CustomerOrderEditDialog } from "@/components/customer/CustomerOrderEditDialog";
+import { FilterBar } from "@/components/list/FilterBar";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { OrderDetailDialog } from "@/components/OrderDetailDialog";
 import { StaffPaymentCreateDialog } from "@/components/staff/StaffPaymentCreateDialog";
 import { useAuth } from "@/context/auth-context";
-import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { OrderModel, PaginatedResponse } from "@/lib/api/types";
+import { usePaginatedList } from "@/hooks/use-paginated-list";
+import { apiFetch, ApiError } from "@/lib/api/client";
+import type { OrderModel } from "@/lib/api/types";
+import { LIST_EXTRA_SORT_NEWEST, ORDER_ADMIN_LIST_FILTERS, ORDER_LIST_FILTERS } from "@/lib/list/presets";
 import {
   canCustomerCancelOrder,
   canCustomerEditOrder,
   canCustomerSubmitOrder,
 } from "@/lib/orders/customer-order-actions";
-import { ORDER_STATUS_LABEL, ORDER_TYPE_LABEL } from "@/lib/orders/order-labels";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { ORDER_TYPE_LABEL } from "@/lib/orders/order-labels";
 import { canCustomerPayDeliveryOrder } from "@/lib/orders/customer-delivery-payment";
 import { canCreatePaymentForOrder } from "@/lib/orders/order-payment";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { btnSecondaryClass, cardClass } from "@/lib/ui/bakery";
 import { formatVnd } from "@/lib/money";
 
-export default function OrdersPage() {
+function OrdersPageContent() {
   const { user, loading: authLoading, hasRole } = useAuth();
   const router = useRouter();
-  const [orders, setOrders] = useState<OrderModel[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const searchParams = useSearchParams();
+  const paymentNotice = searchParams.get("payment");
+  const paymentOrderNumber = searchParams.get("orderNumber")?.trim() ?? "";
   const [busyId, setBusyId] = useState<number | null>(null);
   const [detailOrder, setDetailOrder] = useState<OrderModel | null>(null);
   const [editingOrder, setEditingOrder] = useState<OrderModel | null>(null);
   const [payingOrder, setPayingOrder] = useState<OrderModel | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const canManagePayment = hasRole("CASHIER", "MANAGER", "ADMIN");
+  const isCustomer = hasRole("CUSTOMER");
 
-  const load = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const path = hasRole("CUSTOMER")
-        ? `/orders/filters?${buildPageParams(0, 20)}`
-        : `/orders/filters/admin?${buildPageParams(0, 20)}`;
-      const res = await apiFetch<PaginatedResponse<OrderModel>>(path);
-      setOrders(res.data.content ?? []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Không tải được đơn");
-      setOrders([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [user, hasRole]);
+  const orderListConfig = useMemo(
+    () => ({
+      basePath: isCustomer ? "/orders/filters" : "/orders/filters/admin",
+      filterFields: isCustomer ? ORDER_LIST_FILTERS : ORDER_ADMIN_LIST_FILTERS,
+    }),
+    [isCustomer],
+  );
+
+  const {
+    rows: orders,
+    page,
+    totalPages,
+    totalElements,
+    loading,
+    error,
+    draftFilters,
+    setFilter,
+    applyFilters,
+    resetFilters,
+    reload,
+    goToPage,
+    loadInitial,
+  } = usePaginatedList<OrderModel>({
+    basePath: orderListConfig.basePath,
+    pageSize: 10,
+    extraParams: LIST_EXTRA_SORT_NEWEST,
+  });
 
   useEffect(() => {
     if (authLoading) return;
@@ -55,17 +74,17 @@ export default function OrdersPage() {
       router.replace("/login?next=/orders");
       return;
     }
-    void Promise.resolve().then(() => load());
-  }, [user, authLoading, router, load]);
+    loadInitial();
+  }, [user, authLoading, router, loadInitial, orderListConfig.basePath]);
 
   async function submitOrder(id: number) {
     setBusyId(id);
-    setError(null);
+    setActionError(null);
     try {
       await apiFetch<OrderModel>(`/orders/submit/${id}`, { method: "PATCH" });
-      await load();
+      reload();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Gửi đơn thất bại");
+      setActionError(e instanceof ApiError ? e.message : "Gửi đơn thất bại");
     } finally {
       setBusyId(null);
     }
@@ -73,12 +92,12 @@ export default function OrdersPage() {
 
   async function cancelOrder(id: number) {
     setBusyId(id);
-    setError(null);
+    setActionError(null);
     try {
       await apiFetch<OrderModel>(`/orders/cancel/${id}`, { method: "PATCH" });
-      await load();
+      reload();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Hủy thất bại");
+      setActionError(e instanceof ApiError ? e.message : "Hủy thất bại");
     } finally {
       setBusyId(null);
     }
@@ -90,29 +109,48 @@ export default function OrdersPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1
-            className="font-serif text-3xl font-semibold text-brand-900"
-            style={{ fontFamily: "var(--font-cormorant), serif" }}
-          >
-            Đơn hàng
-          </h1>
-          <p className="mt-1 text-sm text-muted">
-            {hasRole("CUSTOMER") ? "Xác nhận đơn của bạn khi sẵn sàng." : "Theo dõi toàn bộ đơn trong hệ thống."}
-          </p>
-        </div>
-        <Link
-          href="/menu"
-          className="rounded-lg border border-stone-300 px-4 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50"
-        >
-          Thêm món
-        </Link>
-      </div>
+      <PageHeading
+        title="Đơn hàng"
+        subtitle={
+          hasRole("CUSTOMER")
+            ? "Xác nhận đơn của bạn khi sẵn sàng."
+            : "Theo dõi toàn bộ đơn trong hệ thống."
+        }
+        action={
+          <Link href="/menu" className={btnSecondaryClass}>
+            Thêm món
+          </Link>
+        }
+      />
 
-      {error ? <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
+      {paymentNotice === "cancelled" ? (
+        <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-100">
+          Bạn đã hủy thanh toán
+          {paymentOrderNumber ? ` cho đơn ${paymentOrderNumber}` : ""}. Bạn có thể chọn{" "}
+          <span className="font-semibold">Thanh toán lại</span> bên dưới.
+        </p>
+      ) : null}
+      {paymentNotice === "success" ? (
+        <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-emerald-100">
+          Thanh toán VNPAY thành công
+          {paymentOrderNumber ? ` cho đơn ${paymentOrderNumber}` : ""}.
+        </p>
+      ) : null}
 
-      {loading ? (
+      {error || actionError ? (
+        <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{actionError ?? error}</p>
+      ) : null}
+
+      <FilterBar
+        fields={orderListConfig.filterFields}
+        values={draftFilters}
+        onChange={setFilter}
+        onApply={applyFilters}
+        onReset={resetFilters}
+        loading={loading}
+      />
+
+      {loading && orders.length === 0 ? (
         <p className="mt-8 text-muted">Đang tải đơn…</p>
       ) : orders.length === 0 ? (
         <p className="mt-8 rounded-xl border border-dashed border-stone-200 bg-stone-50 p-8 text-center text-muted">
@@ -133,7 +171,7 @@ export default function OrdersPage() {
             return (
             <li
               key={o.id}
-              className="rounded-2xl border border-stone-200 bg-surface p-5 shadow-sm"
+              className={`${cardClass} p-5`}
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -141,9 +179,7 @@ export default function OrdersPage() {
                   <p className="mt-1 text-sm text-muted">
                     {o.tableNumber != null ? `Bàn ${o.tableNumber} · ` : ""}
                     {ORDER_TYPE_LABEL[o.orderType]} ·{" "}
-                    <span className="font-medium text-stone-800">
-                      {ORDER_STATUS_LABEL[o.orderStatus]}
-                    </span>
+                    <StatusBadge domain="order" status={o.orderStatus} className="align-middle" />
                   </p>
                   {o.totalAmount != null ? (
                     <p className="mt-2 text-lg font-semibold text-brand-800">{formatVnd(o.totalAmount)}</p>
@@ -186,13 +222,26 @@ export default function OrdersPage() {
                       Hủy đơn
                     </button>
                   ) : null}
-                  {showCustomerPay || showStaffPay ? (
+                  {showCustomerPay ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        router.push(
+                          `/checkout/payment?orderNumber=${encodeURIComponent(o.orderNumber)}`,
+                        )
+                      }
+                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900 hover:bg-violet-100"
+                    >
+                      Thanh toán lại
+                    </button>
+                  ) : null}
+                  {showStaffPay ? (
                     <button
                       type="button"
                       onClick={() => setPayingOrder(o)}
                       className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900 hover:bg-violet-100"
                     >
-                      {showCustomerPay ? "Thanh toán VNPAY" : "Thanh toán"}
+                      Thanh toán
                     </button>
                   ) : null}
                 </div>
@@ -202,6 +251,17 @@ export default function OrdersPage() {
           })}
         </ul>
       )}
+
+      {!loading && orders.length > 0 ? (
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          loading={loading}
+          onPageChange={goToPage}
+          unitLabel="đơn"
+        />
+      ) : null}
 
       <OrderDetailDialog
         open={detailOrder != null}
@@ -221,18 +281,25 @@ export default function OrdersPage() {
         open={editingOrder != null}
         order={editingOrder}
         onClose={() => setEditingOrder(null)}
-        onSaved={() => void load()}
+        onSaved={reload}
       />
 
       {payingOrder != null ? (
         <StaffPaymentCreateDialog
           open
           initialOrderNumber={payingOrder.orderNumber}
-          customerDeliveryOnly={hasRole("CUSTOMER") && payingOrder.orderType === "DELIVERY"}
           onClose={() => setPayingOrder(null)}
-          onSaved={() => void load()}
+          onSaved={reload}
         />
       ) : null}
     </div>
+  );
+}
+
+export default function OrdersPage() {
+  return (
+    <Suspense fallback={<div className="py-20 text-center text-muted">Đang tải…</div>}>
+      <OrdersPageContent />
+    </Suspense>
   );
 }

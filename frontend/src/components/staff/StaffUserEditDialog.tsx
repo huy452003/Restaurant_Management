@@ -3,12 +3,33 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api/client";
 import type { Gender, UserModel, UserRole } from "@/lib/api/types";
+import { BirthDateInput } from "@/components/BirthDateInput";
+import {
+  AuthAlert,
+  AuthFieldGroup,
+  AuthLabeledInput,
+  AuthPageHeader,
+} from "@/components/auth/AuthFormFields";
+import {
+  authBirthSegmentClass,
+  authGridRowClass,
+  authPrimaryButton,
+  authSecondaryButton,
+  authSelectClass,
+} from "@/components/auth/auth-styles";
+import { IconMail } from "@/components/auth/AuthIcons";
+import { PhoneNationalInput } from "@/components/PhoneNationalInput";
+import { resolveBirthIsoFromField, validateBirthField } from "@/lib/birth";
 import { birthDdMmYyyyToInputDate, formatBirthDdMmYyyy } from "@/lib/dates";
-
+import { isAllowedUserEmail, USER_EMAIL_DOMAIN_MESSAGE } from "@/lib/email";
+import {
+  isValidPhoneDigits,
+  normalizeVietnamMobilePhone,
+  PHONE_VALIDATION_MESSAGE,
+} from "@/lib/phone";
 import { STAFF_ROLE_LABEL_VI } from "@/lib/staff/role-labels";
 
 const ROLES: UserRole[] = ["ADMIN", "CUSTOMER", "MANAGER", "CHEF", "CASHIER"];
-
 const STATUSES = ["ACTIVE", "INACTIVE", "PENDING"] as const;
 
 type Props = {
@@ -17,9 +38,6 @@ type Props = {
   onSaved: () => void;
 };
 
-const fieldClass =
-  "mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20";
-
 export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
   const [username, setUsername] = useState("");
   const [fullname, setFullname] = useState("");
@@ -27,6 +45,7 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
   const [phone, setPhone] = useState("");
   const [gender, setGender] = useState<Gender>("MALE");
   const [birthInput, setBirthInput] = useState("");
+  const [birthFieldError, setBirthFieldError] = useState<string | null>(null);
   const [address, setAddress] = useState("");
   const [role, setRole] = useState<UserRole>("CUSTOMER");
   const [userStatus, setUserStatus] = useState<string>("ACTIVE");
@@ -37,7 +56,6 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
   useEffect(() => {
     if (!row) return;
     void Promise.resolve().then(() => {
-      setUsername(row.username ?? "");
       setFullname(row.fullname ?? "");
       setEmail(row.email ?? "");
       setPhone(row.phone ?? "");
@@ -48,6 +66,7 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
       setUserStatus(row.userStatus ?? "ACTIVE");
       setPassword("");
       setError(null);
+      setBirthFieldError(null);
     });
   }, [row]);
 
@@ -57,7 +76,12 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
     e.preventDefault();
     if (!row) return;
     setError(null);
-    const birthFormatted = formatBirthDdMmYyyy(birthInput);
+    const birthError = validateBirthField(birthInput);
+    if (birthError) {
+      setError(birthError);
+      return;
+    }
+    const birthFormatted = formatBirthDdMmYyyy(resolveBirthIsoFromField(birthInput));
     if (!birthFormatted) {
       setError("Ngày sinh không hợp lệ");
       return;
@@ -67,13 +91,21 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
       setError("Mật khẩu mới tối thiểu 6 ký tự");
       return;
     }
+    if (!isAllowedUserEmail(email.trim())) {
+      setError(USER_EMAIL_DOMAIN_MESSAGE);
+      return;
+    }
+    if (!isValidPhoneDigits(phone)) {
+      setError(PHONE_VALIDATION_MESSAGE);
+      return;
+    }
     setPending(true);
     try {
       const update: Record<string, unknown> = {
-        username: username.trim(),
+        username: row.username,
         fullname: fullname.trim(),
         email: email.trim(),
-        phone: phone.trim(),
+        phone: normalizeVietnamMobilePhone(phone),
         gender,
         birth: birthFormatted,
         address: address.trim(),
@@ -107,94 +139,115 @@ export function StaffUserEditDialog({ row, onClose, onSaved }: Props) {
       }}
     >
       <div
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-stone-200 bg-surface p-6 shadow-xl"
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white px-6 py-8 shadow-xl ring-1 ring-stone-200/80 sm:px-8"
         role="dialog"
         aria-labelledby="edit-user-title"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <h2 id="edit-user-title" className="font-serif text-xl font-semibold text-brand-900">
-          Sửa người dùng #{row.id}
-        </h2>
+        <AuthPageHeader
+          title={`Sửa người dùng #${row.id}`}
+          subtitle={`${row.username} · Cập nhật thông tin và quyền truy cập.`}
+        />
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-3">
-          {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {error ? <AuthAlert variant="error">{error}</AuthAlert> : null}
 
-          <label className="block text-xs font-medium text-stone-600">
-            Tên đăng nhập
-            <input className={fieldClass} value={username} onChange={(e) => setUsername(e.target.value)} required minLength={3} maxLength={50} />
-          </label>
-          <label className="block text-xs font-medium text-stone-600">
-            Họ tên
-            <input className={fieldClass} value={fullname} onChange={(e) => setFullname(e.target.value)} required maxLength={100} />
-          </label>
-          <label className="block text-xs font-medium text-stone-600">
-            Email
-            <input type="email" className={fieldClass} value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </label>
-          <label className="block text-xs font-medium text-stone-600">
-            SĐT (10–11 số)
-            <input className={fieldClass} value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))} required pattern="[0-9]{10,11}" />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-xs font-medium text-stone-600">
-              Giới tính
-              <select className={fieldClass} value={gender} onChange={(e) => setGender(e.target.value as Gender)}>
+          <AuthLabeledInput
+            id="staff-edit-fullname"
+            label="Họ và tên"
+            value={fullname}
+            onChange={(e) => setFullname(e.target.value)}
+            required
+            maxLength={100}
+          />
+
+          <div className={authGridRowClass}>
+            <AuthLabeledInput
+              id="staff-edit-email"
+              label="Email"
+              icon={<IconMail className="h-5 w-5" />}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <AuthFieldGroup label="Điện thoại">
+              <PhoneNationalInput value={phone} onChange={setPhone} variant="auth" required />
+            </AuthFieldGroup>
+          </div>
+
+          <div className={authGridRowClass}>
+            <AuthFieldGroup label="Giới tính">
+              <select
+                value={gender}
+                onChange={(e) => setGender(e.target.value as Gender)}
+                className={authSelectClass}
+              >
                 <option value="MALE">Nam</option>
                 <option value="FEMALE">Nữ</option>
               </select>
-            </label>
-            <label className="block text-xs font-medium text-stone-600">
-              Ngày sinh
-              <input type="date" className={fieldClass} value={birthInput} onChange={(e) => setBirthInput(e.target.value)} required />
-            </label>
+            </AuthFieldGroup>
+            <AuthFieldGroup label="Ngày sinh">
+              <BirthDateInput
+                value={birthInput}
+                onChange={setBirthInput}
+                onValidationChange={setBirthFieldError}
+                layout="fill"
+                className={authBirthSegmentClass}
+                required
+              />
+            </AuthFieldGroup>
           </div>
-          <label className="block text-xs font-medium text-stone-600">
-            Địa chỉ
-            <input className={fieldClass} value={address} onChange={(e) => setAddress(e.target.value)} required maxLength={255} />
-          </label>
-          <label className="block text-xs font-medium text-stone-600">
-            Mật khẩu mới
-            <input
-              type="password"
-              autoComplete="new-password"
-              className={fieldClass}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Để trống = giữ nguyên"
-              maxLength={100}
-            />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-xs font-medium text-stone-600">
-              Vai trò
-              <select className={fieldClass} value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
+
+          <AuthLabeledInput
+            id="staff-edit-address"
+            label="Địa chỉ"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            required
+            maxLength={255}
+          />
+
+          <AuthLabeledInput
+            id="staff-edit-password"
+            label="Mật khẩu mới"
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Để trống = giữ nguyên"
+            maxLength={100}
+          />
+
+          <div className={authGridRowClass}>
+            <AuthFieldGroup label="Vai trò">
+              <select value={role} onChange={(e) => setRole(e.target.value as UserRole)} className={authSelectClass}>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
                     {STAFF_ROLE_LABEL_VI[r]}
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="block text-xs font-medium text-stone-600">
-              Trạng thái
-              <select className={fieldClass} value={userStatus} onChange={(e) => setUserStatus(e.target.value)}>
+            </AuthFieldGroup>
+            <AuthFieldGroup label="Trạng thái">
+              <select value={userStatus} onChange={(e) => setUserStatus(e.target.value)} className={authSelectClass}>
                 {STATUSES.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
                 ))}
               </select>
-            </label>
+            </AuthFieldGroup>
           </div>
 
-          <div className="flex flex-wrap justify-end gap-3 pt-4">
-            <button type="button" onClick={onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm font-medium hover:bg-stone-50">
+          <div className="flex flex-wrap justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className={authSecondaryButton}>
               Hủy
             </button>
             <button
               type="submit"
-              disabled={pending}
-              className="rounded-lg bg-brand-800 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-900 disabled:opacity-50"
+              disabled={pending || birthFieldError != null}
+              className={`${authPrimaryButton} w-auto px-6 normal-case tracking-normal`}
             >
               {pending ? "Đang lưu…" : "Lưu"}
             </button>

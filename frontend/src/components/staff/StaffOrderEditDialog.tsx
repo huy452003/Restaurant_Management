@@ -5,6 +5,12 @@ import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
 import type { OrderModel, OrderStatus, OrderType, PaginatedResponse, TableModel } from "@/lib/api/types";
 import { selectableOrderStatusesForStaff } from "@/lib/orders/order-status-options";
 import { ORDER_TYPES, orderRequiresTable } from "@/lib/orders/order-type";
+import { PhoneNationalInput } from "@/components/PhoneNationalInput";
+import {
+  isValidPhoneDigits,
+  normalizeVietnamMobilePhone,
+  PHONE_VALIDATION_MESSAGE,
+} from "@/lib/phone";
 import { TABLE_STATUS_LABEL_VI } from "@/lib/tables/table-labels";
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
@@ -55,7 +61,7 @@ export function StaffOrderEditDialog({ row, statusOnly = false, tables = [], onC
     let cancelled = false;
     setTablesLoading(true);
     void apiFetch<PaginatedResponse<TableModel>>(
-      `/tables/filters?${buildPageParams(0, 200, { freshSnapshot: true })}`,
+      `/tables/filters?${buildPageParams(0, 200, { tableStatus: "AVAILABLE", freshSnapshot: true })}`,
     )
       .then((res) => {
         if (!cancelled) {
@@ -108,7 +114,7 @@ export function StaffOrderEditDialog({ row, statusOnly = false, tables = [], onC
     void Promise.resolve().then(() => {
       const options = selectableOrderStatusesForStaff(row);
       setCustomerName(row.customerName ?? "");
-      setCustomerPhone((row.customerPhone ?? "").replace(/\D/g, "").slice(0, 11));
+      setCustomerPhone(row.customerPhone ?? "");
       setCustomerEmail(row.customerEmail ?? "");
       setTableNumber(
         row.orderType === "DELIVERY" ? "" : (row.tableNumber ?? ""),
@@ -129,11 +135,11 @@ export function StaffOrderEditDialog({ row, statusOnly = false, tables = [], onC
     !tableNumbersKnown.has(row.tableNumber);
 
   function buildUpdatePayload() {
-    const phone = customerPhone.replace(/\D/g, "").slice(0, 11);
+    const phone = normalizeVietnamMobilePhone(customerPhone);
     if (statusOnly) {
       return {
         customerName: row!.customerName ?? "",
-        customerPhone: (row!.customerPhone ?? "").replace(/\D/g, "").slice(0, 11),
+        customerPhone: normalizeVietnamMobilePhone(row!.customerPhone ?? ""),
         customerEmail: (row!.customerEmail ?? "").trim().toLowerCase(),
         tableNumber: row!.orderType === "DELIVERY" ? null : row!.tableNumber ?? null,
         orderStatus,
@@ -158,9 +164,8 @@ export function StaffOrderEditDialog({ row, statusOnly = false, tables = [], onC
     setError(null);
 
     if (!statusOnly) {
-      const phone = customerPhone.replace(/\D/g, "").slice(0, 11);
-      if (phone.length < 10 || phone.length > 11) {
-        setError("SĐT khách phải 10–11 chữ số");
+      if (!isValidPhoneDigits(customerPhone)) {
+        setError(PHONE_VALIDATION_MESSAGE);
         return;
       }
       if (needsTable && (tableNumber === "" || !tableNumbersKnown.has(tableNumber))) {
@@ -244,13 +249,12 @@ export function StaffOrderEditDialog({ row, statusOnly = false, tables = [], onC
               </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-xs font-medium text-stone-600">
-                  SĐT khách (10–11 số)
-                  <input
-                    className={fieldClass}
+                  SĐT khách
+                  <PhoneNationalInput
                     value={customerPhone}
-                    onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                    onChange={setCustomerPhone}
+                    className="mt-1"
                     required
-                    pattern="[0-9]{10,11}"
                   />
                 </label>
                 <label className="block text-xs font-medium text-stone-600">

@@ -1,12 +1,12 @@
 package com.common.models.reservation;
 
-import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -15,14 +15,13 @@ import lombok.NoArgsConstructor;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class ReservationCustomerRequestModel implements ReservationTablePayload {
-    @NotNull(message = "validate.reservation.tableNumber.required")
-    @Min(value = 1, message = "validate.reservation.tableNumber.min")
-    private Integer tableNumber;
-    @NotNull(message = "validate.reservation.reservationTs.required")
-    @FutureOrPresent(message = "validate.reservation.reservationTs.mustNotBeInPast")
-    @JsonFormat(pattern = "dd-MM-yyyy HH:mm:ss")
-    private LocalDateTime reservationTs;
+public class ReservationCustomerUpdateModel {
+    @NotNull(message = "validate.reservation.reservationDate.required")
+    @JsonFormat(pattern = "dd-MM-yyyy")
+    private LocalDate reservationDate;
+    @NotNull(message = "validate.reservation.reservationTime.required")
+    @JsonFormat(pattern = "HH:mm")
+    private LocalTime reservationTime;
     @NotNull(message = "validate.reservation.numberOfGuests.required")
     @Min(value = 1, message = "validate.reservation.numberOfGuests.min")
     private Integer numberOfGuests;

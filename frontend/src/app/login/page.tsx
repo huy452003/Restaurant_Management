@@ -1,8 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
+import { AuthSplitLayout } from "@/components/auth/AuthSplitLayout";
+import {
+  AuthAlert,
+  AuthFloatingInput,
+  AuthFloatingPassword,
+  AuthFooterLink,
+  AuthPageHeader,
+  AuthSubmitButton,
+} from "@/components/auth/AuthFormFields";
+import { IconLock, IconUser } from "@/components/auth/AuthIcons";
 import { useAuth } from "@/context/auth-context";
 import { ApiError } from "@/lib/api/client";
 
@@ -19,11 +29,15 @@ function readSafeNextPath(): string | null {
   }
 }
 
-export default function LoginPage() {
+function LoginForm() {
   const { login } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const registered = searchParams.get("registered") === "1";
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -33,7 +47,12 @@ export default function LoginPage() {
     setPending(true);
     try {
       await login(username.trim(), password);
-      router.push(readSafeNextPath() ?? "/menu");
+      const afterLogout =
+        typeof window !== "undefined" && window.sessionStorage.getItem("postLogoutLogin") === "1";
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("postLogoutLogin");
+      }
+      router.push(afterLogout ? "/" : (readSafeNextPath() ?? "/"));
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Đăng nhập thất bại");
@@ -43,65 +62,73 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-md flex-col gap-8 px-4 py-16 sm:px-6">
-      <div>
-        <h1
-          className="font-serif text-3xl font-semibold text-brand-900"
-          style={{ fontFamily: "var(--font-cormorant), serif" }}
-        >
-          Đăng nhập
-        </h1>
-        <p className="mt-2 text-sm text-muted">Dùng tài khoản từ hệ thống (JWT).</p>
-      </div>
+    <AuthSplitLayout>
+      <AuthPageHeader
+        title="Đăng nhập Bistro"
+        subtitle="Chào mừng trở lại! Dùng tài khoản bạn đã đăng ký để đặt món và đặt bàn."
+      />
 
-      <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-stone-200 bg-surface p-6 shadow-sm">
-        {error ? (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{error}</p>
+      <form onSubmit={onSubmit} className="space-y-5">
+        {registered ? (
+          <AuthAlert variant="success">
+            Đăng ký thành công. Vui lòng xác minh email (nếu chưa) rồi đăng nhập.
+          </AuthAlert>
         ) : null}
-        <div>
-          <label htmlFor="username" className="block text-sm font-medium text-stone-700">
-            Tên đăng nhập
+        {error ? <AuthAlert variant="error">{error}</AuthAlert> : null}
+
+        <AuthFloatingInput
+          id="username"
+          label="Tên đăng nhập"
+          icon={<IconUser className="h-5 w-5" />}
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+          minLength={3}
+        />
+
+        <AuthFloatingPassword
+          id="password"
+          label="Mật khẩu"
+          icon={<IconLock className="h-5 w-5" />}
+          autoComplete="current-password"
+          value={password}
+          onChange={setPassword}
+          required
+          minLength={6}
+        />
+
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <label className="flex cursor-pointer items-center gap-2 text-stone-600">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="h-4 w-4 rounded border-stone-300 text-brand-800 focus:ring-brand-600/30"
+            />
+            Ghi nhớ đăng nhập
           </label>
-          <input
-            id="username"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-stone-900 shadow-sm outline-none ring-brand-600/0 transition focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20"
-            required
-            minLength={3}
-          />
         </div>
-        <div>
-          <label htmlFor="password" className="block text-sm font-medium text-stone-700">
-            Mật khẩu
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-stone-900 shadow-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20"
-            required
-            minLength={6}
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded-xl bg-brand-800 py-3 text-sm font-semibold text-white shadow transition hover:bg-brand-900 disabled:opacity-60"
-        >
-          {pending ? "Đang xử lý…" : "Đăng nhập"}
-        </button>
+
+        <AuthSubmitButton pending={pending} pendingLabel="Đang xử lý…">
+          Đăng nhập
+        </AuthSubmitButton>
       </form>
 
-      <p className="text-center text-sm text-muted">
+      <AuthFooterLink>
         Chưa có tài khoản?{" "}
-        <Link href="/register" className="font-semibold text-brand-800 underline-offset-2 hover:underline">
+        <Link href="/register" className="font-semibold text-brand-800 hover:underline">
           Đăng ký
         </Link>
-      </p>
-    </div>
+      </AuthFooterLink>
+    </AuthSplitLayout>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<AuthSplitLayout wide={false}><p className="text-sm text-stone-500">Đang tải…</p></AuthSplitLayout>}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -5,14 +5,16 @@ type OrderPaymentFields = Pick<
   "orderStatus" | "totalAmount" | "totalOrderItem" | "canAcceptPayment"
 >;
 
-function parsePositiveAmount(totalAmount?: string): number | null {
-  if (totalAmount == null || totalAmount.trim() === "") {
-    return null;
+/** API có thể trả totalAmount dạng string hoặc number (Jackson). */
+export function parsePositiveAmount(totalAmount?: string | number | null): number | null {
+  if (totalAmount == null) return null;
+  if (typeof totalAmount === "number") {
+    return Number.isFinite(totalAmount) && totalAmount > 0 ? totalAmount : null;
   }
-  const n = Number(totalAmount);
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
+  const s = String(totalAmount).trim();
+  if (s === "") return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
   return n;
 }
 

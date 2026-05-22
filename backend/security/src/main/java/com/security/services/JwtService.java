@@ -73,16 +73,17 @@ public class JwtService {
         return generateRefreshToken(new HashMap<>(), userDetails);
     }
 
-    // tạo token xác thực với claims
-    public String generateVerificationToken(Integer userId) {
+    // tạo token xác thực đăng ký tạm (registrationId = UUID trong Redis, chưa có user trong DB)
+    public String generateVerificationToken(String registrationId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", "verification");
-        claims.put("userId", userId);
+        claims.put("registrationId", registrationId);
 
         return Jwts
             .builder()
             .claims(claims)
-            .subject(String.valueOf(userId))
+            .subject(registrationId)
+            .id(registrationId)
             .issuedAt(new Date(System.currentTimeMillis()))
             .expiration(new Date(System.currentTimeMillis() + jwtConfig.verificationExpiration()))
             .signWith(getSecretKey())
@@ -130,15 +131,22 @@ public class JwtService {
         return extractClaims(token, Claims -> Claims.get("role", String.class));
     }
 
-    // lấy userId từ token xác thực
-    public Integer extractUserIdFromVerificationToken(String token) {
+    // lấy registrationId từ token xác thực đăng ký tạm
+    public String extractRegistrationIdFromVerificationToken(String token) {
         Claims claims = extractAllClaims(token);
 
         String type = claims.get("type", String.class);
-        if(!"verification".equals(type)){
+        if (!"verification".equals(type)) {
             throw new JwtException("Invalid token type");
         }
-        return claims.get("userId", Integer.class);
+        String registrationId = claims.get("registrationId", String.class);
+        if (registrationId == null || registrationId.isBlank()) {
+            registrationId = claims.getSubject();
+        }
+        if (registrationId == null || registrationId.isBlank()) {
+            throw new JwtException("Missing registration id in verification token");
+        }
+        return registrationId;
     }
 
     // kiểm tra token có hết hạn chưa

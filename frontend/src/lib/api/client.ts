@@ -141,6 +141,9 @@ export async function apiFetch<T>(
   return json as ApiResponse<T>;
 }
 
+/** Dùng khi API backend có `@PageableDefault(..., direction = DESC)` — không gắn global vào mọi request. */
+export const PAGE_SORT_ID_DESC = "id,desc";
+
 export function buildPageParams(
   page: number,
   size: number,

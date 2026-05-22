@@ -2,22 +2,19 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { FilterBar } from "@/components/list/FilterBar";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
 import { StaffOrderEditDialog } from "@/components/staff/StaffOrderEditDialog";
 import { StaffPaymentCreateDialog } from "@/components/staff/StaffPaymentCreateDialog";
 import { useAuth } from "@/context/auth-context";
-import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
+import { usePaginatedList } from "@/hooks/use-paginated-list";
+import { apiFetch, buildPageParams } from "@/lib/api/client";
 import type { OrderModel, OrderStatus, PaginatedResponse, TableModel } from "@/lib/api/types";
+import { LIST_EXTRA_SORT_NEWEST, ORDER_ADMIN_LIST_FILTERS } from "@/lib/list/presets";
 import { canCreatePaymentForOrder } from "@/lib/orders/order-payment";
 import { formatVnd } from "@/lib/money";
-
-const STATUS_LABEL: Record<OrderStatus, string> = {
-  PENDING: "Chờ xác nhận",
-  CONFIRMED: "Đã xác nhận",
-  PREPARING: "Đang chuẩn bị",
-  COMPLETED: "Hoàn thành",
-  CANCELLED: "Đã hủy",
-};
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 function isTerminal(s: OrderStatus): boolean {
   return s === "COMPLETED" || s === "CANCELLED";
@@ -28,33 +25,34 @@ export default function StaffOrdersPage() {
   const canManagePayment = hasRole("CASHIER", "MANAGER", "ADMIN");
   const canEditOrder = hasRole("ADMIN", "MANAGER", "CASHIER");
   const router = useRouter();
-  const [orders, setOrders] = useState<OrderModel[]>([]);
   const [tables, setTables] = useState<TableModel[]>([]);
   const [editing, setEditing] = useState<OrderModel | null>(null);
   const [payingOrder, setPayingOrder] = useState<OrderModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch<PaginatedResponse<OrderModel>>(
-        `/orders/filters/admin?${buildPageParams(0, 30)}`,
-      );
-      setOrders(res.data.content ?? []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Không có quyền hoặc lỗi mạng");
-      setOrders([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    rows: orders,
+    page,
+    totalPages,
+    totalElements,
+    loading,
+    error,
+    draftFilters,
+    setFilter,
+    applyFilters,
+    resetFilters,
+    reload,
+    goToPage,
+    loadInitial,
+  } = usePaginatedList<OrderModel>({
+    basePath: "/orders/filters/admin",
+    pageSize: 15,
+    extraParams: LIST_EXTRA_SORT_NEWEST,
+  });
 
   const loadTables = useCallback(async () => {
     try {
       const res = await apiFetch<PaginatedResponse<TableModel>>(
-        `/tables/filters?${buildPageParams(0, 200, { freshSnapshot: true })}`,
+        `/tables/filters?${buildPageParams(0, 200, { tableStatus: "AVAILABLE", freshSnapshot: true })}`,
       );
       setTables(res.data.content ?? []);
     } catch {
@@ -72,11 +70,11 @@ export default function StaffOrdersPage() {
       router.replace("/staff");
       return;
     }
-    void load();
+    loadInitial();
     if (canEditOrder) {
       void loadTables();
     }
-  }, [user, authLoading, canEditOrder, canManagePayment, router, load, loadTables]);
+  }, [user, authLoading, canEditOrder, canManagePayment, router, loadInitial, loadTables]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -85,10 +83,20 @@ export default function StaffOrdersPage() {
         Đơn hàng
       </h1>
 
+      <FilterBar
+        fields={ORDER_ADMIN_LIST_FILTERS}
+        values={draftFilters}
+        onChange={setFilter}
+        onApply={applyFilters}
+        onReset={resetFilters}
+        loading={loading}
+      />
+
       {error ? <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p> : null}
-      {loading ? (
+      {loading && orders.length === 0 ? (
         <p className="mt-8 text-muted">Đang tải…</p>
       ) : (
+        <>
         <div className="mt-6 overflow-x-auto rounded-xl border border-stone-200">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-stone-600">
@@ -112,7 +120,9 @@ export default function StaffOrdersPage() {
                     <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
                     <td className="px-4 py-3">{o.tableNumber ?? "—"}</td>
                     <td className="px-4 py-3 text-muted">{o.customerName ?? "—"}</td>
-                    <td className="px-4 py-3">{STATUS_LABEL[o.orderStatus]}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge domain="order" status={o.orderStatus} />
+                    </td>
                     <td className="px-4 py-3 tabular-nums">{o.totalOrderItem ?? 0}</td>
                     <td className="px-4 py-3 font-medium">{formatVnd(o.totalAmount)}</td>
                     <td className="px-4 py-3">
@@ -149,6 +159,16 @@ export default function StaffOrdersPage() {
             </tbody>
           </table>
         </div>
+        {orders.length === 0 ? <p className="mt-4 text-sm text-muted">Không có kết quả phù hợp.</p> : null}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          loading={loading}
+          onPageChange={goToPage}
+          unitLabel="đơn"
+        />
+        </>
       )}
 
       {canEditOrder ? (
@@ -156,7 +176,7 @@ export default function StaffOrdersPage() {
           row={editing}
           tables={tables}
           onClose={() => setEditing(null)}
-          onSaved={() => void load()}
+          onSaved={reload}
         />
       ) : null}
 
@@ -165,7 +185,7 @@ export default function StaffOrdersPage() {
           open={payingOrder != null}
           initialOrderNumber={payingOrder?.orderNumber}
           onClose={() => setPayingOrder(null)}
-          onSaved={() => void load()}
+          onSaved={reload}
         />
       ) : null}
     </div>

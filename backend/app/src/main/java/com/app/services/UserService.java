@@ -13,6 +13,7 @@ import com.common.models.user.UpdateUserNormalModel;
 import com.common.models.user.UserModel;
 import com.common.models.user.UserLoginModel;
 import com.common.models.user.UserRegisterModel;
+import com.common.models.user.UserUpdatePasswordRequestModel;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
@@ -29,6 +30,7 @@ public interface UserService {
     void logout();
     UserModel updateNormal(UpdateUserNormalModel update, Integer userId);
     List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds);
+    UserModel updatePasswordByCustomer(UserUpdatePasswordRequestModel update, Integer userId);
     UserModel verifyAndActivate(String verificationToken);
-    String resendVerificationToken(Integer userId);
+    String resendVerificationToken(String email);
 }

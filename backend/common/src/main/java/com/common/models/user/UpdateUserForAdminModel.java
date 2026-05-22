@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import com.common.enums.Gender;
 import com.common.enums.UserRole;
 import com.common.enums.UserStatus;
+import com.common.validation.AllowedUserEmailDomain;
+import com.common.validation.ValidVietnamMobilePhone;
 
 import jakarta.validation.constraints.*;
 
@@ -27,10 +29,11 @@ public class UpdateUserForAdminModel {
     
     @NotBlank(message = "validate.user.email.required")
     @Email(message = "validate.user.email.invalidFormat")
+    @AllowedUserEmailDomain
     private String email;
     
     @NotBlank(message = "validate.user.phone.required")
-    @Pattern(regexp = "^[0-9]{10,11}$", message = "validate.user.phone.invalidFormat")
+    @ValidVietnamMobilePhone
     private String phone;
     
     @NotNull(message = "validate.user.gender.required")

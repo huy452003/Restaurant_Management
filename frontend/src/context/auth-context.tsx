@@ -18,10 +18,16 @@ type AuthState = {
   loading: boolean;
 };
 
+type ProfileFields = Pick<
+  UserLoginModel,
+  "fullname" | "email" | "phone" | "gender" | "birth" | "address"
+>;
+
 type AuthContextValue = AuthState & {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   setUserFromStorage: () => void;
+  updateProfile: (fields: ProfileFields) => void;
   hasRole: (...roles: UserRole[]) => boolean;
 };
 
@@ -91,6 +97,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       clearClientSessionStorage();
       setUser(null);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem("postLogoutLogin", "1");
+        window.location.replace("/login");
+      }
     }
   }, []);
 
@@ -102,6 +112,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user],
   );
 
+  const updateProfile = useCallback((fields: ProfileFields) => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const next = { ...prev, ...fields };
+      window.localStorage.setItem(STORAGE_USER, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       user,
@@ -109,9 +128,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       setUserFromStorage,
+      updateProfile,
       hasRole,
     }),
-    [user, loading, login, logout, setUserFromStorage, hasRole],
+    [user, loading, login, logout, setUserFromStorage, updateProfile, hasRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

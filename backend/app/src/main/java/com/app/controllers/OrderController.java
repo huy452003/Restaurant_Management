@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.context.MessageSource;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -73,7 +74,7 @@ public class OrderController {
         @RequestParam(required = false) BigDecimal subTotal,
         @RequestParam(required = false) BigDecimal tax,
         @RequestParam(required = false) BigDecimal totalAmount,
-        @PageableDefault(size = 5, sort = "id") Pageable pageable
+        @PageableDefault(size = 5, sort = "id", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         LogContext logContext = getLogContext("filtersForCustomer", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
@@ -111,7 +112,7 @@ public class OrderController {
         @RequestParam(required = false) BigDecimal subTotal,
         @RequestParam(required = false) BigDecimal tax,
         @RequestParam(required = false) BigDecimal totalAmount,
-        @PageableDefault(size = 5, sort = "id") Pageable pageable
+        @PageableDefault(size = 5, sort = "id", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         LogContext logContext = getLogContext("filtersForAdmin", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);

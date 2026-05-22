@@ -3,12 +3,9 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
 import type { OrderItemModel, OrderModel, PaginatedResponse } from "@/lib/api/types";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatVnd } from "@/lib/money";
-import {
-  ORDER_ITEM_STATUS_LABEL,
-  ORDER_STATUS_LABEL,
-  ORDER_TYPE_LABEL,
-} from "@/lib/orders/order-labels";
+import { ORDER_TYPE_LABEL } from "@/lib/orders/order-labels";
 
 type Props = {
   open: boolean;
@@ -110,7 +107,9 @@ export function OrderDetailDialog({ open, order, onClose, onEdit }: Props) {
         <dl className="mt-5 grid gap-2 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-stone-500">Trạng thái</dt>
-            <dd className="font-medium text-stone-900">{ORDER_STATUS_LABEL[order.orderStatus]}</dd>
+            <dd>
+              <StatusBadge domain="order" status={order.orderStatus} />
+            </dd>
           </div>
           <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-stone-500">Loại đơn</dt>
@@ -201,8 +200,8 @@ export function OrderDetailDialog({ open, order, onClose, onEdit }: Props) {
                     <td className="px-3 py-2.5 tabular-nums whitespace-nowrap font-medium">
                       {formatVnd(line.subTotal)}
                     </td>
-                    <td className="px-3 py-2.5 text-xs">
-                      {ORDER_ITEM_STATUS_LABEL[line.orderItemStatus] ?? line.orderItemStatus}
+                    <td className="px-3 py-2.5">
+                      <StatusBadge domain="orderItem" status={line.orderItemStatus} />
                     </td>
                   </tr>
                 ))}

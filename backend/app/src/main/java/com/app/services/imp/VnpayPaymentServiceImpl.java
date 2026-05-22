@@ -3,6 +3,8 @@ package com.app.services.imp;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
@@ -25,6 +27,7 @@ import com.app.utils.VnpayReturnHtmlUtils;
 import com.app.utils.VnpaySignatureUtils;
 import com.common.entities.OrderEntity;
 import com.common.entities.PaymentEntity;
+import com.common.enums.OrderType;
 import com.common.enums.PaymentMethod;
 import com.common.enums.PaymentStatus;
 import com.common.models.payment.PaymentCreateRequestModel;
@@ -238,14 +241,14 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
 
         if (!VnpaySignatureUtils.verifySecureHash(params, vnpayProperties.getHashSecret())) {
             log.logWarn("VNPAY return invalid signature", logContext);
-            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl(null));
             return;
         }
 
         String txnRef = params.get("vnp_TxnRef");
         String rsp = params.get("vnp_ResponseCode");
         if (!StringUtils.hasText(txnRef)) {
-            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl(null));
             return;
         }
 
@@ -253,15 +256,17 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         try {
             paymentId = Integer.parseInt(txnRef.trim());
         } catch (NumberFormatException e) {
-            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl(null));
             return;
         }
 
         PaymentEntity payment = paymentRepository.findById(paymentId).orElse(null);
         if (payment == null || payment.getPaymentMethod() != PaymentMethod.VNPAY) {
-            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl());
+            VnpayReturnHtmlUtils.write(response, false, null, params, resolvePostPaymentHomeUrl(null));
             return;
         }
+
+        String homeUrl = resolvePostPaymentHomeUrl(payment);
 
         String vnpAmountStr = params.get("vnp_Amount");
         if (StringUtils.hasText(vnpAmountStr)) {
@@ -269,11 +274,11 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
                 long wire = Long.parseLong(vnpAmountStr.trim());
                 long ex = payment.getAmount().setScale(2, RoundingMode.HALF_UP).movePointRight(2).longValueExact();
                 if (wire != ex) {
-                    VnpayReturnHtmlUtils.write(response, false, payment, params, resolvePostPaymentHomeUrl());
+                    VnpayReturnHtmlUtils.write(response, false, payment, params, homeUrl);
                     return;
                 }
             } catch (NumberFormatException ignored) {
-                VnpayReturnHtmlUtils.write(response, false, payment, params, resolvePostPaymentHomeUrl());
+                VnpayReturnHtmlUtils.write(response, false, payment, params, homeUrl);
                 return;
             }
         }
@@ -291,23 +296,80 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         }
 
         boolean ok = VNP_RSP_SUCCESS.equals(rsp);
-        String frontendBase = vnpayProperties.getFrontendRedirectBase();
-        if (StringUtils.hasText(frontendBase)) {
-            String sep = frontendBase.contains("?") ? "&" : "?";
-            String target = frontendBase + sep + "paymentId=" + paymentId + "&vnp_ResponseCode=" + (rsp != null ? rsp : "");
-            response.sendRedirect(target);
+        String frontendReturn = resolveFrontendReturnUrl(payment, paymentId, rsp);
+        if (StringUtils.hasText(frontendReturn)) {
+            response.sendRedirect(frontendReturn);
             return;
         }
 
-        VnpayReturnHtmlUtils.write(response, ok, payment, params, resolvePostPaymentHomeUrl());
+        VnpayReturnHtmlUtils.write(response, ok, payment, params, homeUrl);
     }
 
-    private String resolvePostPaymentHomeUrl() {
+    private OrderEntity resolveOrderForPayment(PaymentEntity payment) {
+        if (payment == null) {
+            return null;
+        }
+        OrderEntity order = payment.getOrder();
+        if (order != null) {
+            return order;
+        }
+        if (payment.getOrderId() == null) {
+            return null;
+        }
+        return orderRepository.findById(payment.getOrderId()).orElse(null);
+    }
+
+    private boolean isCustomerDeliveryPayment(PaymentEntity payment) {
+        OrderEntity order = resolveOrderForPayment(payment);
+        return order != null && order.getOrderType() == OrderType.DELIVERY;
+    }
+
+    /** URL nút «Quay lại» trên trang HTML return (khi không redirect SPA). */
+    private String resolvePostPaymentHomeUrl(PaymentEntity payment) {
+        String origin = resolveFrontendOrigin();
+        if (isCustomerDeliveryPayment(payment)) {
+            return origin + "/orders";
+        }
+        return origin + "/staff/orders";
+    }
+
+    private String resolveFrontendOrigin() {
         String base = vnpayProperties.getFrontendRedirectBase();
         if (StringUtils.hasText(base)) {
-            return base.replaceAll("/$", "") + "/staff/payments";
+            String trimmed = base.trim().replaceAll("/$", "");
+            int idx = trimmed.indexOf("/payment/");
+            if (idx > 0) {
+                return trimmed.substring(0, idx);
+            }
+            if (trimmed.endsWith("/payment/vnpay-return")) {
+                return trimmed.substring(0, trimmed.length() - "/payment/vnpay-return".length());
+            }
+            return trimmed;
         }
-        return "http://localhost:3000/staff/payments";
+        return "http://localhost:3000";
+    }
+
+    /** Redirect SPA sau return VNPAY — luôn qua /payment/vnpay-return rồi về đơn hàng. */
+    private String resolveFrontendReturnUrl(PaymentEntity payment, int paymentId, String rsp) {
+        String origin = resolveFrontendOrigin();
+        String orderNumber = "";
+        OrderEntity order = resolveOrderForPayment(payment);
+        if (order != null && StringUtils.hasText(order.getOrderNumber())) {
+            orderNumber = order.getOrderNumber();
+        }
+        String target = origin + "/payment/vnpay-return";
+        StringBuilder q = new StringBuilder();
+        q.append("paymentId=").append(paymentId);
+        q.append("&vnp_ResponseCode=").append(URLEncoder.encode(rsp != null ? rsp : "", StandardCharsets.UTF_8));
+        if (StringUtils.hasText(orderNumber)) {
+            q.append("&orderNumber=").append(URLEncoder.encode(orderNumber, StandardCharsets.UTF_8));
+        }
+        if (isCustomerDeliveryPayment(payment)) {
+            q.append("&audience=customer");
+        } else {
+            q.append("&audience=staff");
+        }
+        return target + "?" + q;
     }
 
     // private method

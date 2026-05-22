@@ -7,7 +7,8 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
 import com.common.enums.ReservationStatus;
 
@@ -24,8 +25,10 @@ public class ReservationEntity extends BaseEntity {
     private String customerPhone;
     @Column(name = "customer_email", nullable = false)
     private String customerEmail;
-    @Column(name = "reservation_ts", nullable = false)
-    private LocalDateTime reservationTs;
+    @Column(name = "reservation_date", nullable = false)
+    private LocalDate reservationDate;
+    @Column(name = "reservation_time", nullable = false)
+    private LocalTime reservationTime;
     @Column(name = "number_of_guests", nullable = false)
     private Integer numberOfGuests;
     @Column(name = "reservation_status", nullable = false)

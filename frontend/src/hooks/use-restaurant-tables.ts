@@ -29,6 +29,7 @@ export function useRestaurantTables(options: Options = {}) {
       const extra: Record<string, string | number | boolean | undefined> = {};
       if (tableStatus) extra.tableStatus = tableStatus;
       if (excludeTablesWithPendingOrder) extra.excludeTablesWithPendingOrder = true;
+      if (freshSnapshot) extra.freshSnapshot = true;
       const qs = buildPageParams(0, 200, extra);
       const res = await apiFetch<PaginatedResponse<TableModel>>(`/tables/filters?${qs}`);
       setTables(res.data.content ?? []);

@@ -14,8 +14,10 @@ export function birthDdMmYyyyToInputDate(s: string | undefined): string {
   const parts = s.trim().split("-");
   if (parts.length !== 3) return "";
   const [dd, mm, yyyy] = parts;
-  if (!yyyy || !mm || !dd) return "";
-  return `${yyyy.padStart(4, "0")}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  if (!yyyy || !mm || !dd || !/^\d{4}$/.test(yyyy.trim())) return "";
+  const year = Number(yyyy);
+  if (year < 1000 || year > 9999) return "";
+  return `${String(year).padStart(4, "0")}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
 /** Backend: "dd-MM-yyyy HH:mm:ss" — dùng giờ địa phương (không đổi UTC). */

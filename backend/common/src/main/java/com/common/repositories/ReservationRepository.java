@@ -8,7 +8,9 @@ import org.springframework.stereotype.Repository;
 
 import com.common.entities.ReservationEntity;
 import com.common.enums.ReservationStatus;
-import java.time.LocalDateTime;
+
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 @Repository
@@ -18,14 +20,15 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
         SELECT COUNT(r) > 0
         FROM ReservationEntity r
         WHERE r.table.tableNumber = :tableNumber
+          AND r.reservationDate = :reservationDate
+          AND r.reservationTime = :reservationTime
           AND r.reservationStatus IN :activeStatuses
-          AND r.reservationTs BETWEEN :startTs AND :endTs
           AND (:excludeId IS NULL OR r.id <> :excludeId)
     """)
-    boolean existsActiveTimeslotConflict(
+    boolean existsActiveSlot(
         @Param("tableNumber") Integer tableNumber,
-        @Param("startTs") LocalDateTime startTs,
-        @Param("endTs") LocalDateTime endTs,
+        @Param("reservationDate") LocalDate reservationDate,
+        @Param("reservationTime") LocalTime reservationTime,
         @Param("activeStatuses") List<ReservationStatus> activeStatuses,
         @Param("excludeId") Integer excludeId
     );
@@ -35,13 +38,10 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
         FROM ReservationEntity r
         WHERE r.table.tableNumber = :tableNumber
           AND r.reservationStatus IN :activeStatuses
-          AND r.reservationTs BETWEEN :windowStart AND :windowEnd
           AND (:excludeId IS NULL OR r.id <> :excludeId)
     """)
-    boolean existsActiveReservationInWindow(
+    boolean existsActiveReservationOnTable(
         @Param("tableNumber") Integer tableNumber,
-        @Param("windowStart") LocalDateTime windowStart,
-        @Param("windowEnd") LocalDateTime windowEnd,
         @Param("activeStatuses") List<ReservationStatus> activeStatuses,
         @Param("excludeId") Integer excludeId
     );

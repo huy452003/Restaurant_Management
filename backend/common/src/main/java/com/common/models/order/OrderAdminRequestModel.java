@@ -1,9 +1,8 @@
 package com.common.models.order;
 
-import java.time.LocalDateTime;
-
 import com.common.enums.OrderStatus;
 import com.common.enums.OrderType;
+import com.common.validation.ValidVietnamMobilePhone;
 
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -11,7 +10,6 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -25,7 +23,7 @@ public class OrderAdminRequestModel {
     @Size(min = 1, max = 50, message = "validate.reservation.customerName.size")
     private String customerName;
     @NotBlank(message = "validate.reservation.customerPhone.required")
-    @Pattern(regexp = "^[0-9]{10,11}$", message = "validate.reservation.customerPhone.invalidFormat")
+    @ValidVietnamMobilePhone
     private String customerPhone;
     @NotBlank(message = "validate.reservation.customerEmail.required")
     @Email(message = "validate.reservation.customerEmail.invalidFormat")

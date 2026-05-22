@@ -53,7 +53,6 @@ public class MenuItemController {
     }
 
     @GetMapping("/filters")
-    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Response<PaginatedResponse<MenuItemModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,

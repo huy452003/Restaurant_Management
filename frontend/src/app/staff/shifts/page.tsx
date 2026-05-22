@@ -1,45 +1,45 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { FilterBar } from "@/components/list/FilterBar";
+import { PaginationBar } from "@/components/list/PaginationBar";
 import { StaffBackLink } from "@/components/staff/StaffBackLink";
 import { StaffShiftCreateDialog } from "@/components/staff/StaffShiftCreateDialog";
 import { StaffShiftEditDialog } from "@/components/staff/StaffShiftEditDialog";
 import { useAuth } from "@/context/auth-context";
-import { apiFetch, ApiError, buildPageParams } from "@/lib/api/client";
-import type { PaginatedResponse, ShiftModel } from "@/lib/api/types";
-
-const STATUS_LABEL: Record<string, string> = {
-  SCHEDULED: "Đã đặt ca",
-  IN_PROGRESS: "Đang diễn ra",
-  COMPLETED: "Đã hoàn thành",
-  CANCELLED: "Đã hủy",
-};
+import { usePaginatedList } from "@/hooks/use-paginated-list";
+import type { ShiftModel } from "@/lib/api/types";
+import { LIST_EXTRA_SORT_NEWEST, SHIFT_LIST_FILTERS } from "@/lib/list/presets";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 export default function StaffShiftsPage() {
   const { user, loading: authLoading, hasRole } = useAuth();
   const router = useRouter();
-  const [rows, setRows] = useState<ShiftModel[]>([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ShiftModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const canManage = hasRole("ADMIN", "MANAGER");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch<PaginatedResponse<ShiftModel>>(`/shifts/filters?${buildPageParams(0, 80)}`);
-      setRows(res.data.content ?? []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Không tải được ca làm");
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    rows,
+    page,
+    totalPages,
+    totalElements,
+    loading,
+    error,
+    draftFilters,
+    setFilter,
+    applyFilters,
+    resetFilters,
+    reload,
+    goToPage,
+    loadInitial,
+  } = usePaginatedList<ShiftModel>({
+    basePath: "/shifts/filters",
+    pageSize: 15,
+    extraParams: LIST_EXTRA_SORT_NEWEST,
+  });
 
   useEffect(() => {
     if (authLoading) return;
@@ -51,8 +51,8 @@ export default function StaffShiftsPage() {
       router.replace("/staff");
       return;
     }
-    void Promise.resolve().then(() => load());
-  }, [user, authLoading, hasRole, router, load]);
+    loadInitial();
+  }, [user, authLoading, hasRole, router, loadInitial]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -74,10 +74,20 @@ export default function StaffShiftsPage() {
           </button>
         ) : null}
       </div>
+      <FilterBar
+        fields={SHIFT_LIST_FILTERS}
+        values={draftFilters}
+        onChange={setFilter}
+        onApply={applyFilters}
+        onReset={resetFilters}
+        loading={loading}
+      />
+
       {error ? <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p> : null}
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <p className="mt-8 text-muted">Đang tải…</p>
       ) : (
+        <>
         <div className="mt-6 overflow-x-auto rounded-xl border border-stone-200">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-stone-100 text-stone-600">
@@ -99,7 +109,9 @@ export default function StaffShiftsPage() {
                   <td className="px-3 py-2.5 text-xs">{s.startTime}</td>
                   <td className="px-3 py-2.5 text-xs">{s.endTime}</td>
                   <td className="px-3 py-2.5 tabular-nums">{s.totalWorkingHours ?? "—"}</td>
-                  <td className="px-3 py-2.5">{STATUS_LABEL[s.shiftStatus] ?? s.shiftStatus}</td>
+                  <td className="px-3 py-2.5">
+                    <StatusBadge domain="shift" status={s.shiftStatus} />
+                  </td>
                   {canManage ? (
                     <td className="px-3 py-2.5">
                       <button
@@ -119,16 +131,26 @@ export default function StaffShiftsPage() {
             </tbody>
           </table>
         </div>
+        {rows.length === 0 ? <p className="mt-4 text-sm text-muted">Không có kết quả phù hợp.</p> : null}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          loading={loading}
+          onPageChange={goToPage}
+          unitLabel="ca"
+        />
+        </>
       )}
 
       {canManage ? (
         <>
-          <StaffShiftCreateDialog open={creating} onClose={() => setCreating(false)} onSaved={() => void load()} />
+          <StaffShiftCreateDialog open={creating} onClose={() => setCreating(false)} onSaved={reload} />
           <StaffShiftEditDialog
             open={editing != null}
             row={editing}
             onClose={() => setEditing(null)}
-            onSaved={() => void load()}
+            onSaved={reload}
           />
         </>
       ) : null}

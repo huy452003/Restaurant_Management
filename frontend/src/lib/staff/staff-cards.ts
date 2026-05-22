@@ -23,10 +23,16 @@ export const STAFF_CARDS: StaffCardConfig[] = [
     accessRoles: ["ADMIN", "MANAGER", "CASHIER"],
   },
   {
+    href: "/staff/order",
+    title: "Đặt món",
+    desc: "Ghi đơn tại quầy — chọn bàn, món và gửi bếp.",
+    accessRoles: ["ADMIN", "MANAGER", "CASHIER"],
+  },
+  {
     href: "/staff/reservations",
     title: "Đặt chỗ",
     desc: "Đặt bàn và lịch đặt chỗ của khách.",
-    accessRoles: ["ADMIN", "MANAGER"],
+    accessRoles: ["ADMIN", "MANAGER", "CASHIER"],
   },
   {
     href: "/staff/categories",
@@ -43,8 +49,8 @@ export const STAFF_CARDS: StaffCardConfig[] = [
   {
     href: "/staff/tables",
     title: "Bàn",
-    desc: "Sơ đồ bàn và trạng thái chỗ.",
-    accessRoles: ["ADMIN", "MANAGER", "CHEF", "CASHIER"],
+    desc: "Trạng thái bàn — thu ngân xem bàn trống.",
+    accessRoles: ["ADMIN", "MANAGER", "CASHIER"],
   },
   {
     href: "/staff/shifts",

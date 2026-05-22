@@ -6,9 +6,10 @@ import org.springframework.util.StringUtils;
 
 import com.app.services.ReservationService;
 import com.app.services.TableStatusSyncService;
-import com.app.utils.OrderTableHoldUtils;
+import com.app.utils.TableHoldGuard;
+import com.app.utils.TableLookupUtils;
 import com.app.utils.UserEntityUtils;
-import com.common.enums.OrderStatus;
+import com.common.utils.ReservationHoldUtils;
 import com.common.repositories.OrderRepository;
 import com.common.repositories.ReservationRepository;
 import com.common.repositories.TableRepository;
@@ -16,14 +17,18 @@ import com.common.repositories.UserRepository;
 import com.common.specifications.FilterCondition;
 import com.common.specifications.SpecificationHelper;
 import com.common.utils.FilterPageCacheFacade;
+import com.common.utils.ReservationTimeSlots;
 import com.common.entities.ReservationEntity;
 import com.common.entities.TableEntity;
 import com.common.enums.ReservationStatus;
 import com.common.enums.TableStatus;
 import com.common.enums.UserRole;
 import com.common.models.reservation.ReservationAdminRequestModel;
-import com.common.models.reservation.ReservationCustomerRequestModel;
+import com.common.models.reservation.ReservationAvailabilityModel;
+import com.common.models.reservation.ReservationCustomerCreateModel;
+import com.common.models.reservation.ReservationCustomerUpdateModel;
 import com.common.models.reservation.ReservationModel;
+import com.common.enums.ReservationSlot;
 import com.common.entities.UserEntity;
 
 import org.springframework.data.domain.Page;
@@ -42,9 +47,10 @@ import jakarta.transaction.Transactional;
 
 import java.util.List;
 import java.util.stream.Collectors;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -89,20 +95,15 @@ public class ReservationServiceImp implements ReservationService {
 
     private static final String RESERVATION_REDIS_KEY_PREFIX = "reservation:";
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
-    private static final long NEAR_RESERVATION_WINDOW_MINUTES = 30L;
-    private static final long RESERVATION_SLOT_DURATION_MINUTES = 90L;
-    private static final List<ReservationStatus> ACTIVE_CONFLICT_STATUSES = Arrays.asList(
-        ReservationStatus.PENDING, ReservationStatus.CONFIRMED, ReservationStatus.SEATED
-    );
 
     @Override
     public Page<ReservationModel> filtersForCustomer(
-        Integer id, Integer tableNumber, LocalDateTime reservationTs, Integer numberOfGuests,
-        ReservationStatus reservationStatus, Pageable pageable
+        Integer id, Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable
     ) {
         return filtersInternal(
             id, null, null, null,
-            tableNumber, reservationTs, numberOfGuests, reservationStatus, pageable,
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus, pageable,
             "filtersForCustomer"
         );
     }
@@ -110,27 +111,27 @@ public class ReservationServiceImp implements ReservationService {
     @Override
     public Page<ReservationModel> filtersForAdmin(
         Integer id, String customerName, String customerPhone, String customerEmail,
-        Integer tableNumber, LocalDateTime reservationTs, Integer numberOfGuests,
-        ReservationStatus reservationStatus, Pageable pageable
+        Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable
     ) {
         return filtersInternal(
             id, customerName, customerPhone, customerEmail,
-            tableNumber, reservationTs, numberOfGuests, reservationStatus, pageable,
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus, pageable,
             "filtersForAdmin"
         );
     }
 
     private Page<ReservationModel> filtersInternal(
         Integer id, String customerName, String customerPhone, String customerEmail,
-        Integer tableNumber, LocalDateTime reservationTs, Integer numberOfGuests,
-        ReservationStatus reservationStatus, Pageable pageable, String methodName
+        Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable, String methodName
     ) {
         LogContext logContext = getLogContext(methodName, Collections.emptyList());
         log.logInfo("Filtering reservations with pagination ...!", logContext);
 
         List<FilterCondition<ReservationEntity>> conditions = buildFilterConditions(
             id, customerName, customerPhone, customerEmail,
-            tableNumber, reservationTs, numberOfGuests, reservationStatus
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus
         );
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
             "ReservationModel", logContext, log
@@ -179,7 +180,7 @@ public class ReservationServiceImp implements ReservationService {
 
     @Override
     @Transactional
-    public List<ReservationModel> create(List<ReservationCustomerRequestModel> reservations) {
+    public List<ReservationModel> create(List<ReservationCustomerCreateModel> reservations) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating reservations ...!", logContext);
 
@@ -192,22 +193,25 @@ public class ReservationServiceImp implements ReservationService {
                 validateAndApplyTableBooking(
                     reservationModel.getTableNumber(),
                     reservationModel.getNumberOfGuests(),
-                    reservationModel.getReservationTs(),
+                    reservationModel.getReservationDate(),
+                    reservationModel.getReservationTime(),
                     null,
                     true,
                     logContext
                 );
 
-                ReservationEntity reservationEntity = modelMapper.map(
-                    reservationModel, ReservationEntity.class
-                );
+                ReservationEntity reservationEntity = new ReservationEntity();
+                reservationEntity.setReservationDate(reservationModel.getReservationDate());
+                reservationEntity.setReservationTime(reservationModel.getReservationTime());
+                reservationEntity.setNumberOfGuests(reservationModel.getNumberOfGuests());
+                reservationEntity.setSpecialRequest(reservationModel.getSpecialRequest());
                 reservationEntity.setCustomerName(currentUser.getFullname());
                 reservationEntity.setCustomerPhone(currentUser.getPhone());
                 reservationEntity.setCustomerEmail(currentUser.getEmail());
-                reservationEntity.setTable(getTable(reservationModel.getTableNumber(), logContext));
-                if (reservationEntity.getReservationStatus() == null) {
-                    reservationEntity.setReservationStatus(ReservationStatus.PENDING);
-                }
+                reservationEntity.setTable(TableLookupUtils.requireTable(
+                    tableRepository, reservationModel.getTableNumber(), "ReservationModel", logContext, log
+                ));
+                reservationEntity.setReservationStatus(ReservationStatus.PENDING);
                 return reservationEntity;
             }
         ).collect(Collectors.toList());
@@ -229,25 +233,17 @@ public class ReservationServiceImp implements ReservationService {
     @Override
     @Transactional
     public ReservationModel updateForCustomer(
-        ReservationCustomerRequestModel update, Integer reservationId
+        ReservationCustomerUpdateModel update, Integer reservationId
     ) {
         LogContext logContext = getLogContext(
-            "update", Collections.singletonList(reservationId)
+            "updateForCustomer", Collections.singletonList(reservationId)
         );
         log.logInfo("Updating reservations ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
             "ReservationModel", logContext, log
         );
-        ReservationEntity currentReservation = reservationRepository.findById(reservationId).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Reservation not found with id: " + reservationId,
-                Collections.singletonList(reservationId),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
+        ReservationEntity currentReservation = requireReservation(reservationId, logContext);
 
         if(!Objects.equals(currentReservation.getReservationStatus(), ReservationStatus.PENDING)) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
@@ -271,25 +267,28 @@ public class ReservationServiceImp implements ReservationService {
             }
         }
 
-        Boolean hasChanges = !Objects.equals(update.getTableNumber(), currentReservation.getTable().getTableNumber()) ||
-                             !Objects.equals(update.getReservationTs(), currentReservation.getReservationTs()) ||
+        Integer tableNumber = currentReservation.getTable().getTableNumber();
+        Boolean hasChanges = !Objects.equals(update.getReservationDate(), currentReservation.getReservationDate()) ||
+                             !Objects.equals(update.getReservationTime(), currentReservation.getReservationTime()) ||
                              !Objects.equals(update.getNumberOfGuests(), currentReservation.getNumberOfGuests()) ||
                              !Objects.equals(update.getSpecialRequest(), currentReservation.getSpecialRequest());
 
         if(hasChanges) {
-            Integer oldTableNumber = currentReservation.getTable().getTableNumber();
             applyTableTransition(
                 currentReservation,
-                update.getTableNumber(),
-                update.getReservationTs(),
+                tableNumber,
+                update.getReservationDate(),
+                update.getReservationTime(),
                 currentReservation.getReservationStatus(),
                 update.getNumberOfGuests(),
                 logContext
             );
-            modelMapper.map(update, currentReservation);
-            currentReservation.setTable(getTable(update.getTableNumber(), logContext));
+            currentReservation.setReservationDate(update.getReservationDate());
+            currentReservation.setReservationTime(update.getReservationTime());
+            currentReservation.setNumberOfGuests(update.getNumberOfGuests());
+            currentReservation.setSpecialRequest(update.getSpecialRequest());
             reservationRepository.save(currentReservation);
-            syncTableNumbers(oldTableNumber, currentReservation.getTable().getTableNumber());
+            tableStatusSyncService.syncTableStatus(tableNumber);
             log.logInfo("completed, updated reservation with id: " + reservationId, logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
@@ -352,7 +351,8 @@ public class ReservationServiceImp implements ReservationService {
                                  !Objects.equals(update.getCustomerPhone(), current.getCustomerPhone()) ||
                                  !Objects.equals(update.getCustomerEmail(), current.getCustomerEmail()) ||
                                  !Objects.equals(update.getTableNumber(), current.getTable().getTableNumber()) ||
-                                 !Objects.equals(update.getReservationTs(), current.getReservationTs()) ||
+                                 !Objects.equals(update.getReservationDate(), current.getReservationDate()) ||
+                                 !Objects.equals(update.getReservationTime(), current.getReservationTime()) ||
                                  !Objects.equals(update.getNumberOfGuests(), current.getNumberOfGuests()) ||
                                  !Objects.equals(update.getReservationStatus(), current.getReservationStatus()) ||
                                  !Objects.equals(update.getSpecialRequest(), current.getSpecialRequest());
@@ -369,16 +369,23 @@ public class ReservationServiceImp implements ReservationService {
                 applyTableTransition(
                     current,
                     update.getTableNumber(),
-                    update.getReservationTs(),
+                    update.getReservationDate(),
+                    update.getReservationTime(),
                     update.getReservationStatus(),
                     update.getNumberOfGuests(),
                     logContext
                 );
-                modelMapper.map(update, current);
+                current.setReservationDate(update.getReservationDate());
+                current.setReservationTime(update.getReservationTime());
+                current.setNumberOfGuests(update.getNumberOfGuests());
+                current.setReservationStatus(update.getReservationStatus());
+                current.setSpecialRequest(update.getSpecialRequest());
                 current.setCustomerName(customerUser.getFullname());
                 current.setCustomerPhone(customerUser.getPhone());
                 current.setCustomerEmail(customerUser.getEmail());
-                current.setTable(getTable(update.getTableNumber(), logContext));
+                current.setTable(TableLookupUtils.requireTable(
+                    tableRepository, update.getTableNumber(), "ReservationModel", logContext, log
+                ));
                 if (tableNumberBefore != null) {
                     tablesToSync.add(tableNumberBefore);
                 }
@@ -413,15 +420,7 @@ public class ReservationServiceImp implements ReservationService {
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
             "ReservationModel", logContext, log
         );
-        ReservationEntity foundReservation = reservationRepository.findById(reservationId).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Reservation not found with id: " + reservationId,
-                Collections.singletonList(reservationId),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
+        ReservationEntity foundReservation = requireReservation(reservationId, logContext);
 
         if(!Objects.equals(foundReservation.getReservationStatus(), ReservationStatus.CONFIRMED) &&
             !Objects.equals(foundReservation.getReservationStatus(), ReservationStatus.PENDING)) {
@@ -455,22 +454,55 @@ public class ReservationServiceImp implements ReservationService {
         return toReservationModel(foundReservation);
     }
 
+    @Override
+    public ReservationAvailabilityModel getTimeSlotAvailability(Integer tableNumber, LocalDate date) {
+        LogContext logContext = getLogContext("getTimeSlotAvailability", Collections.emptyList());
+        
+        userEntityUtils.requireAuthenticatedUser("ReservationModel", logContext, log);
+        
+        if (tableNumber == null || tableNumber < 1) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "tableNumber must be positive",
+                Collections.singletonList(tableNumber),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        if (date == null) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "date must not be null",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        TableLookupUtils.requireTable(tableRepository, tableNumber, "ReservationModel", logContext, log);
+
+        LocalDateTime now = LocalDateTime.now();
+        List<String> bookedTimes = new ArrayList<>();
+        for (ReservationSlot slot : ReservationSlot.all()) {
+            LocalTime time = slot.toLocalTime();
+            if (ReservationSlot.isPastSlot(date, time, now)) {
+                continue;
+            }
+            if (reservationRepository.existsActiveSlot(
+                tableNumber, date, time, ReservationHoldUtils.ACTIVE_HOLD_STATUSES, null
+            )) {
+                bookedTimes.add(slot.label());
+            }
+        }
+
+        return new ReservationAvailabilityModel(tableNumber, date, bookedTimes);
+    }
+
     // private method
 
     private void syncTableForReservation(ReservationEntity reservation) {
         if (reservation.getTable() != null) {
             tableStatusSyncService.syncTableStatus(reservation.getTable().getTableNumber());
         }
-    }
-
-    private void syncTableNumbers(Integer... tableNumbers) {
-        Set<Integer> unique = new HashSet<>();
-        for (Integer tableNumber : tableNumbers) {
-            if (tableNumber != null) {
-                unique.add(tableNumber);
-            }
-        }
-        unique.forEach(tableStatusSyncService::syncTableStatus);
     }
 
     private void clearReservationAndTableCaches(LogContext logContext, String actionName) {
@@ -487,26 +519,12 @@ public class ReservationServiceImp implements ReservationService {
         return reservationModel;
     }
 
-    private TableEntity getTable(Integer tableNumber, LogContext logContext) {
-        return tableRepository.findByTableNumber(tableNumber).orElseThrow(() -> {
+    private ReservationEntity requireReservation(Integer reservationId, LogContext logContext) {
+        return reservationRepository.findById(reservationId).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Table not found with tableNumber: " + tableNumber,
-                Collections.singletonList(tableNumber),
+                "Reservation not found with id: " + reservationId,
+                Collections.singletonList(reservationId),
                 "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
-    }
-
-    // Lấy bàn chỉ khi đang AVAILABLE để đảm bảo có thể reserve ngay.
-    private TableEntity getTableWithAvailableStatus(Integer tableNumber, LogContext logContext) {
-        return tableRepository.findByTableNumberAndTableStatus(
-            tableNumber, TableStatus.AVAILABLE).orElseThrow(() -> {
-            ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Table is not available: " + tableNumber + ", please choose another table",
-                "ReservationModel",
-                "table must be available"
             );
             log.logError(e.getMessage(), e, logContext);
             return e;
@@ -516,66 +534,60 @@ public class ReservationServiceImp implements ReservationService {
     // Đồng bộ vòng đời trạng thái bàn khi reservation thay đổi (đổi bàn/hủy/chuyển terminal).
     private void applyTableTransition(
         ReservationEntity current, Integer newTableNumber,
-        LocalDateTime newReservationTs, ReservationStatus requestedStatus, Integer numberOfGuests,
+        LocalDate newDate, LocalTime newTime, ReservationStatus requestedStatus, Integer numberOfGuests,
         LogContext logContext
     ) {
         ReservationStatus targetStatus = requestedStatus != null ? requestedStatus : current.getReservationStatus();
-        LocalDateTime targetReservationTs = newReservationTs != null ? newReservationTs : current.getReservationTs();
+        LocalDate targetDate = newDate != null ? newDate : current.getReservationDate();
+        LocalTime targetTime = newTime != null ? newTime : current.getReservationTime();
         boolean isTableChanged = !Objects.equals(newTableNumber, current.getTable().getTableNumber());
 
-        if (isTerminalStatus(targetStatus)) {
+        if (ReservationHoldUtils.isTerminal(targetStatus)) {
             return;
         }
 
         validateAndApplyTableBooking(
             newTableNumber,
             numberOfGuests,
-            targetReservationTs,
+            targetDate,
+            targetTime,
             current.getId(),
             isTableChanged,
             logContext
         );
-
-        if (isTableChanged && current.getTable() != null) {
-            tableStatusSyncService.syncTableStatus(
-                current.getTable().getTableNumber(),
-                current.getId()
-            );
-        }
     }
 
     // Validate nghiệp vụ đặt bàn (capacity, timeslot conflict, near-time reserve) và áp dụng trạng thái bàn.
     private void validateAndApplyTableBooking(
         Integer tableNumber,
         Integer numberOfGuests,
-        LocalDateTime reservationTs,
+        LocalDate reservationDate,
+        LocalTime reservationTime,
         Integer excludeReservationId,
         boolean requireTableAvailableInNearWindow,
         LogContext logContext
     ) {
-        if (reservationTs == null) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "reservationTs must not be null",
-                Collections.singletonList(tableNumber),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
+        validateSchedule(reservationDate, reservationTime, logContext);
         validateCapacityForTable(tableNumber, numberOfGuests, logContext);
-        assertNoPendingOrderOnTable(tableNumber, logContext);
-        ensureNoActiveTimeslotConflict(tableNumber, reservationTs, excludeReservationId, logContext);
+        TableHoldGuard.assertNoHoldingOrderOnTable(
+            orderRepository, tableNumber, null, "ReservationModel", logContext, log
+        );
+        ensureSlotAvailable(tableNumber, reservationDate, reservationTime, excludeReservationId, logContext);
 
-        if (!isNearReservationWindow(reservationTs)) {
+        if (!ReservationTimeSlots.isNearWindow(reservationDate, reservationTime)) {
             return;
         }
 
         if (requireTableAvailableInNearWindow) {
-            getTableWithAvailableStatus(tableNumber, logContext);
+            TableLookupUtils.requireAvailableTable(
+                tableRepository, tableNumber, "ReservationModel", logContext, log
+            );
             return;
         }
 
-        TableEntity table = getTable(tableNumber, logContext);
+        TableEntity table = TableLookupUtils.requireTable(
+            tableRepository, tableNumber, "ReservationModel", logContext, log
+        );
         TableStatus status = table.getTableStatus();
         if (status == TableStatus.AVAILABLE || status == TableStatus.RESERVED) {
             return;
@@ -590,33 +602,26 @@ public class ReservationServiceImp implements ReservationService {
         throw e;
     }
 
-    private void assertNoPendingOrderOnTable(Integer tableNumber, LogContext logContext) {
-        if (!orderRepository.existsActiveHoldingOrderOnTable(
-            tableNumber,
-            OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES,
-            null
-        )) {
-            return;
-        }
-        ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-            "Table " + tableNumber
-                + " already has an active order. Choose another table or try again later.",
-            "ReservationModel",
-            "table has active holding order"
-        );
-        log.logError(e.getMessage(), e, logContext);
-        throw e;
-    }
-
     // Kiểm tra sức chứa của bàn có đáp ứng số khách hay không.
     private void validateCapacityForTable(
         Integer tableNumber, Integer numberOfGuests, LogContext logContext
     ) {
-        TableEntity table = getTable(tableNumber, logContext);
+        TableEntity table = TableLookupUtils.requireTable(
+            tableRepository, tableNumber, "ReservationModel", logContext, log
+        );
+        if (numberOfGuests == null || numberOfGuests < 1) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "numberOfGuests must be at least 1",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
         if (table.getCapacity() < numberOfGuests) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-                "Table capacity is not enough: " + table.getTableNumber() +
-                ", please try again with a smaller number of guests: " + table.getCapacity(),
+                "Table " + table.getTableNumber() + " holds up to " + table.getCapacity()
+                    + " guests. Please reduce party size.",
                 "ReservationModel",
                 "table capacity must be enough"
             );
@@ -625,44 +630,64 @@ public class ReservationServiceImp implements ReservationService {
         }
     }
 
-    // Chặn double-booking: kiểm tra bàn có bị trùng khung giờ với reservation active khác không.
-    private void ensureNoActiveTimeslotConflict(
-        Integer tableNumber, LocalDateTime reservationTs, Integer excludeReservationId, LogContext logContext
+    private void validateSchedule(LocalDate reservationDate, LocalTime reservationTime, LogContext logContext) {
+        if (reservationDate == null || reservationTime == null) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservationDate and reservationTime must not be null",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        if (!ReservationTimeSlots.isValidSlot(reservationTime)) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservationTime must be a 30-minute slot between 10:00 and 21:30",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        if (ReservationTimeSlots.isPastSlot(reservationDate, reservationTime, LocalDateTime.now())) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservation schedule must not be in the past",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+    }
+
+    private void ensureSlotAvailable(
+        Integer tableNumber,
+        LocalDate reservationDate,
+        LocalTime reservationTime,
+        Integer excludeReservationId,
+        LogContext logContext
     ) {
-        LocalDateTime slotStart = reservationTs.minusMinutes(RESERVATION_SLOT_DURATION_MINUTES);
-        LocalDateTime slotEnd = reservationTs.plusMinutes(RESERVATION_SLOT_DURATION_MINUTES);
-        boolean hasConflict = reservationRepository.existsActiveTimeslotConflict(
-            tableNumber, slotStart, slotEnd, ACTIVE_CONFLICT_STATUSES, excludeReservationId
-        );
-        if (!hasConflict) {
+        if (!reservationRepository.existsActiveSlot(
+            tableNumber, reservationDate, reservationTime, ReservationHoldUtils.ACTIVE_HOLD_STATUSES, excludeReservationId
+        )) {
             return;
         }
         ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
-            "Table already has an active reservation in this timeslot: " + tableNumber,
+            "Table already has a reservation at "
+                + ReservationTimeSlots.format(reservationTime) + " on " + reservationDate
+                + " (table " + tableNumber + ")",
             "ReservationModel",
-            "reservation timeslot must not conflict"
+            "reservation slot must not conflict"
         );
         log.logError(e.getMessage(), e, logContext);
         throw e;
     }
 
-    // Xác định reservation đã nằm trong cửa sổ near-time để khóa bàn vận hành chưa.
-    private boolean isNearReservationWindow(LocalDateTime reservationTs) {
-        return !reservationTs.isAfter(LocalDateTime.now().plusMinutes(NEAR_RESERVATION_WINDOW_MINUTES));
-    }
-
-    // Đánh dấu các trạng thái kết thúc để trả bàn về AVAILABLE.
-    private boolean isTerminalStatus(ReservationStatus status) {
-        return status == ReservationStatus.CANCELLED ||
-            status == ReservationStatus.COMPLETED ||
-            status == ReservationStatus.NO_SHOW;
-    }
-
     // Build danh sách điều kiện filter động cho query pagination.
     private List<FilterCondition<ReservationEntity>> buildFilterConditions(
         Integer id, String customerName, String customerPhone, String customerEmail,
-        Integer tableNumber, LocalDateTime reservationTs, Integer numberOfGuests,
-        ReservationStatus reservationStatus
+        Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus
     ) {
         List<FilterCondition<ReservationEntity>> conditions = new ArrayList<>();
         if(id != null && id > 0) {
@@ -680,8 +705,11 @@ public class ReservationServiceImp implements ReservationService {
         if(tableNumber != null) {
             conditions.add(FilterCondition.eq("table.tableNumber", tableNumber));
         }
-        if(reservationTs != null) {
-            conditions.add(FilterCondition.eq("reservationTs", reservationTs));
+        if(reservationDate != null) {
+            conditions.add(FilterCondition.eq("reservationDate", reservationDate));
+        }
+        if(reservationTime != null) {
+            conditions.add(FilterCondition.eq("reservationTime", reservationTime));
         }
         if(numberOfGuests != null) {
             conditions.add(FilterCondition.eq("numberOfGuests", numberOfGuests));
