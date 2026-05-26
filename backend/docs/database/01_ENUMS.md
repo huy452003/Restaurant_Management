@@ -7,7 +7,6 @@ Vai trò người dùng trong hệ thống
 - `ADMIN` - Quản trị viên
 - `MANAGER` - Quản lý
 - `WAITER` - Nhân viên phục vụ
-- `CHEF` - Đầu bếp
 - `CASHIER` - Thu ngân
 
 ## 2. UserStatus

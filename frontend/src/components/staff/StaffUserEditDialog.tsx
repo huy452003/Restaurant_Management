@@ -29,7 +29,7 @@ import {
 } from "@/lib/phone";
 import { STAFF_ROLE_LABEL_VI } from "@/lib/staff/role-labels";
 
-const ROLES: UserRole[] = ["ADMIN", "CUSTOMER", "MANAGER", "CHEF", "CASHIER"];
+const ROLES: UserRole[] = ["ADMIN", "CUSTOMER", "MANAGER", "CASHIER"];
 const STATUSES = ["ACTIVE", "INACTIVE", "PENDING"] as const;
 
 type Props = {

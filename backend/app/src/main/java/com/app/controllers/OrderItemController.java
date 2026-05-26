@@ -26,8 +26,12 @@ import com.common.models.orderItem.OrderItemCreateModel;
 import com.common.models.orderItem.OrderItemCustomerUpdateModel;
 import com.common.models.orderItem.OrderItemModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.common.models.Response;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -59,6 +63,7 @@ public class OrderItemController {
 
     @GetMapping("/filters")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-read", fallbackMethod = "filtersForCustomerFallback")
     public ResponseEntity<Response<PaginatedResponse<OrderItemModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -86,6 +91,7 @@ public class OrderItemController {
     
     @PostMapping("")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-write", fallbackMethod = "createFallback")
     public ResponseEntity<Response<List<OrderItemModel>>> create(
         Locale locale,
         @RequestBody @Valid List<OrderItemCreateModel> orderItems
@@ -107,6 +113,7 @@ public class OrderItemController {
 
     @PatchMapping("/{orderItemId}")
     @PreAuthorize("hasRole('CUSTOMER')")
+    @RateLimiter(name = "order-item-controller-customer-write", fallbackMethod = "updateForCustomerFallback")
     public ResponseEntity<Response<OrderItemModel>> updateForCustomer(
         Locale locale,
         @RequestBody @Valid OrderItemCustomerUpdateModel request,
@@ -127,9 +134,9 @@ public class OrderItemController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PutMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "order-item-controller-staff-write", fallbackMethod = "updateByAdminFallback")
     public ResponseEntity<Response<List<OrderItemModel>>> updateByAdmin(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<OrderItemAdminUpdateModel> request
@@ -147,5 +154,40 @@ public class OrderItemController {
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<OrderItemModel>>> filtersForCustomerFallback(
+        Locale locale, Integer id, String orderNumber, 
+        OrderStatus orderItemStatus, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersForCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<OrderItemModel>>> createFallback(
+        Locale locale, List<OrderItemCreateModel> orderItems, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<OrderItemModel>> updateForCustomerFallback(
+        Locale locale, OrderItemCustomerUpdateModel request, Integer orderItemId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateForCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<OrderItemModel>>> updateByAdminFallback(
+        Locale locale, WrapperUpdateRequest<OrderItemAdminUpdateModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateByAdmin");
+        return null;
     }
 }

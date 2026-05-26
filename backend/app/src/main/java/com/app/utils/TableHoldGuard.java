@@ -10,14 +10,13 @@ public final class TableHoldGuard {
     private TableHoldGuard() {
     }
 
+    // kiểm tra xem bàn có đơn giữ bàn không
     public static void assertNoHoldingOrderOnTable(
-        OrderRepository orderRepository,
-        Integer tableNumber,
-        Integer excludeOrderId,
-        String modelName,
-        LogContext logContext,
+        OrderRepository orderRepository, Integer tableNumber,
+        Integer excludeOrderId, String modelName, LogContext logContext,
         LoggingService log
     ) {
+        // nếu không có đơn nào đang sử dụng bàn này thì không cần kiểm tra
         if (!orderRepository.existsActiveHoldingOrderOnTable(
             tableNumber,
             OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES,
@@ -25,6 +24,7 @@ public final class TableHoldGuard {
         )) {
             return;
         }
+        // nếu có đơn nào đang sử dụng bàn này thì không được phép assign bàn
         ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
             "Table " + tableNumber
                 + " already has an active order. Choose another table or try again later.",

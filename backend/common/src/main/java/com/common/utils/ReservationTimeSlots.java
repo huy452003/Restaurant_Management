@@ -20,29 +20,35 @@ public final class ReservationTimeSlots {
     private ReservationTimeSlots() {
     }
 
+    // kiểm tra xem giờ đặt bàn có trong cửa sổ gần giờ hiện tại không
     public static boolean isNearWindow(LocalDate date, LocalTime time) {
         LocalDateTime schedule = toDateTime(date, time);
         return !schedule.isAfter(LocalDateTime.now().plusMinutes(NEAR_WINDOW_MINUTES));
     }
 
+    // lấy tất cả các giờ đặt bàn
     public static List<LocalTime> all() {
         return ReservationSlot.all().stream()
             .map(ReservationSlot::toLocalTime)
             .collect(Collectors.toList());
     }
 
+    // kiểm tra xem giờ đặt bàn có hợp lệ không
     public static boolean isValidSlot(LocalTime time) {
         return ReservationSlot.isValid(time);
     }
 
+    // chuyển đổi ngày và giờ đặt bàn thành LocalDateTime
     public static LocalDateTime toDateTime(LocalDate date, LocalTime time) {
         return ReservationSlot.toDateTime(date, time);
     }
 
+    // format giờ đặt bàn thành chuỗi HH:mm
     public static String format(LocalTime time) {
         return ReservationSlot.from(time).map(ReservationSlot::label).orElse(time.toString());
     }
 
+    // kiểm tra xem giờ đặt bàn có trong quá khứ không
     public static boolean isPastSlot(LocalDate date, LocalTime time, LocalDateTime now) {
         return ReservationSlot.isPastSlot(date, time, now);
     }

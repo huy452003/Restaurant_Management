@@ -13,6 +13,7 @@ public class TableStatusSyncOnStartup {
     @Autowired
     private TableStatusSyncService tableStatusSyncService;
 
+    // đồng bộ trạng thái cho tất cả bàn khi application start up
     @EventListener(ApplicationReadyEvent.class)
     public void reconcileOnStartup() {
         tableStatusSyncService.reconcileAllTableStatuses();

@@ -2,7 +2,6 @@ export type UserRole =
   | "ADMIN"
   | "CUSTOMER"
   | "MANAGER"
-  | "CHEF"
   | "CASHIER";
 
 export type Gender = "MALE" | "FEMALE";

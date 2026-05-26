@@ -24,6 +24,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Integer>, Jp
 
     boolean existsByOrderNumber(String orderNumber);
 
+    // khóa order khi phiên thanh toán để tránh vượt tổng tiền khi có nhiều request đồng thời.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT o FROM OrderEntity o WHERE o.id = :id")
     Optional<OrderEntity> lockByIdForPayment(@Param("id") Integer id);
@@ -34,6 +35,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Integer>, Jp
         Integer tableNumber, List<OrderStatus> orderStatuses
     );
 
+    // kiểm tra xem có đơn giữ bàn nào đang giữ bàn không
     @Query("""
         SELECT CASE WHEN COUNT(o) > 0 THEN true ELSE false END
         FROM OrderEntity o
@@ -47,18 +49,21 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Integer>, Jp
         @Param("excludeOrderId") Integer excludeOrderId
     );
 
+    // lấy danh sách bàn đã có đơn giữ bàn
     @Query("""
         SELECT DISTINCT o.table.tableNumber FROM OrderEntity o
         WHERE o.orderStatus IN :statuses AND o.table IS NOT NULL
         """)
     List<Integer> findDistinctTableNumbersByOrderStatusIn(@Param("statuses") List<OrderStatus> statuses);
 
+    // lấy danh sách đơn theo trạng thái và thời gian tạo
     @Query("SELECT o FROM OrderEntity o WHERE o.orderStatus = :status AND o.createdAt < :cutoff")
     List<OrderEntity> findByOrderStatusAndCreatedAtBefore(
         @Param("status") OrderStatus status,
         @Param("cutoff") LocalDateTime cutoff
     );
 
+    // lấy danh sách bàn đã có đơn giữ bàn theo trạng thái
     @Query("SELECT DISTINCT o.table.tableNumber FROM OrderEntity o WHERE o.orderStatus = :status AND o.table IS NOT NULL")
     List<Integer> findDistinctTableNumbersByOrderStatus(@Param("status") OrderStatus status);
 

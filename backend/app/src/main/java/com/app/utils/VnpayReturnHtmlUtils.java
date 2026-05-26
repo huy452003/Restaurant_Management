@@ -18,6 +18,7 @@ public final class VnpayReturnHtmlUtils {
     private VnpayReturnHtmlUtils() {
     }
 
+    // viết html cho vnpay return
     public static void write(
         HttpServletResponse response,
         boolean success,
@@ -30,6 +31,7 @@ public final class VnpayReturnHtmlUtils {
         response.getWriter().write(buildHtml(success, payment, vnpParams, homeUrl));
     }
 
+    // tạo html cho vnpay return
     private static String buildHtml(
         boolean success,
         PaymentEntity payment,

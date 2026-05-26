@@ -18,10 +18,12 @@ import org.springframework.web.bind.annotation.RestController;
 import com.app.services.VnpayPaymentService;
 import com.common.models.Response;
 import com.common.models.payment.VnpayInitRequestModel;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.common.models.payment.VnpayCheckoutResponse;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -48,6 +50,7 @@ public class VnpayPaymentController {
 
     @PostMapping("/init")
     @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN','CUSTOMER')")
+    @RateLimiter(name = "vnpay-payment-controller-init", fallbackMethod = "initFallback")
     public ResponseEntity<Response<VnpayCheckoutResponse>> init(
         Locale locale,
         HttpServletRequest httpRequest,
@@ -78,5 +81,15 @@ public class VnpayPaymentController {
         LogContext logContext = getLogContext("vnpayIpn");
         log.logInfo("VNPAY IPN handler", logContext);
         return vnpayPaymentService.handleIpn(request);
+    }
+
+    // ======================================== Fallback Methods ========================================
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<VnpayCheckoutResponse>> initFallback(
+        Locale locale, HttpServletRequest httpRequest, VnpayInitRequestModel body, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "initFallback");
+        return null;
     }
 }

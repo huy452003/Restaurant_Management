@@ -53,8 +53,7 @@ public final class FilterPageCacheFacade {
 
     public static <T> void writeFirstPageCache(
         RedisTemplate<String, Object> redisTemplate,
-        String cacheKey,
-        Page<T> page
+        String cacheKey, Page<T> page
     ) {
         if (cacheKey == null || page == null) {
             return;

@@ -14,6 +14,7 @@ import org.springframework.util.StringUtils;
 
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -21,7 +22,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.app.services.MenuItemService;
@@ -37,8 +41,11 @@ import com.common.utils.FilterPageCacheFacade;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 @Service
 public class MenuItemServiceImp implements MenuItemService{
@@ -67,6 +74,7 @@ public class MenuItemServiceImp implements MenuItemService{
     private static final String MENU_ITEM_REDIS_KEY_PREFIX = "menu-item:";
 
     @Override
+    @CircuitBreaker(name = "menu-item-service-read", fallbackMethod = "filtersFallback")
     public Page<MenuItemModel> filters(
         Integer id, String name, String categoryName,
         MenuItemStatus menuItemStatus, Pageable pageable
@@ -115,6 +123,8 @@ public class MenuItemServiceImp implements MenuItemService{
     }
 
     @Override
+    @CircuitBreaker(name = "menu-item-service-write", fallbackMethod = "createsFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public List<MenuItemModel> create(List<MenuItemModel> menuItems) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating menu items ...!", logContext);
@@ -169,11 +179,11 @@ public class MenuItemServiceImp implements MenuItemService{
     }
 
     @Override
+    @CircuitBreaker(name = "menu-item-service-write", fallbackMethod = "updatesFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<MenuItemModel> update(List<MenuItemModel> updates, List<Integer> menuItemIds) {
-        LogContext logContext = getLogContext(
-            "update", 
-            menuItemIds != null ? menuItemIds : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("update", menuItemIds);
         log.logInfo("Updating menu items ...!", logContext);
 
         if(updates.size() != menuItemIds.size()){
@@ -260,7 +270,7 @@ public class MenuItemServiceImp implements MenuItemService{
         ).collect(Collectors.toList());
     }
 
-    // private method
+    // ======================================== Helper Methods ========================================
 
     private MenuItemModel toMenuItemModel(MenuItemEntity entity) {
         MenuItemModel menuItemModel = modelMapper.map(entity, MenuItemModel.class);
@@ -301,4 +311,51 @@ public class MenuItemServiceImp implements MenuItemService{
         return conditions;
     }
 
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<MenuItemModel> filtersFallback(
+        Integer id, String name, String categoryName, MenuItemStatus menuItemStatus, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<MenuItemEntity>> conditions = buildFilterConditions(
+            id, name, categoryName, menuItemStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            MENU_ITEM_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<MenuItemModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, MenuItemModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<MenuItemModel> createsFallback(List<MenuItemModel> menuItems, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "creates");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<MenuItemModel> updatesFallback(List<MenuItemModel> updates, List<Integer> menuItemIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updates");
+        return null;
+    }
 }

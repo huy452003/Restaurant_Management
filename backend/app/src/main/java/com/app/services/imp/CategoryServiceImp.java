@@ -1,7 +1,10 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.app.services.CategoryService;
@@ -17,12 +20,17 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.util.List;
 import java.util.Map;
@@ -60,6 +68,7 @@ public class CategoryServiceImp implements CategoryService {
     private static final String CATEGORY_REDIS_KEY_PREFIX = "category:";
 
     @Override
+    @CircuitBreaker(name = "category-service-read", fallbackMethod = "filtersFallback")
     public Page<CategoryModel> filters(
         Integer id, String name, CategoryStatus categoryStatus, Pageable pageable
     ) {
@@ -109,7 +118,9 @@ public class CategoryServiceImp implements CategoryService {
     }
 
     @Override
-    public List<CategoryModel> create(List<CategoryModel> categories) {
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @CircuitBreaker(name = "category-service-write", fallbackMethod = "createsFallback")
+    public List<CategoryModel> creates(List<CategoryModel> categories) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating categories ...!", logContext);
 
@@ -151,10 +162,11 @@ public class CategoryServiceImp implements CategoryService {
     }
     
     @Override
-    public List<CategoryModel> update(List<CategoryModel> updates, List<Integer> categoryIds) {
-        LogContext logContext = getLogContext(
-            "update", categoryIds != null ? categoryIds : Collections.emptyList()
-        );
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @CircuitBreaker(name = "category-service-write", fallbackMethod = "updatesFallback")
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
+    public List<CategoryModel> updates(List<CategoryModel> updates, List<Integer> categoryIds) {
+        LogContext logContext = getLogContext("update", categoryIds);
         log.logInfo("Updating categories ...!", logContext);
 
         if(updates.size() != categoryIds.size()){
@@ -236,8 +248,7 @@ public class CategoryServiceImp implements CategoryService {
         ).collect(Collectors.toList());
     }
 
-    
-    // private method
+    // ======================================== Helper Methods ========================================
     
     private List<FilterCondition<CategoryEntity>> buildFilterConditions(
         Integer id, String name, CategoryStatus categoryStatus
@@ -254,4 +265,53 @@ public class CategoryServiceImp implements CategoryService {
         }
         return conditions;
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<CategoryModel> filtersFallback(
+        Integer id, String name, CategoryStatus categoryStatus, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<CategoryEntity>> conditions = buildFilterConditions(
+            id, name, categoryStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            CATEGORY_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<CategoryModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, CategoryModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<CategoryModel> createsFallback(List<CategoryModel> categories, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "creates");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<CategoryModel> updatesFallback(List<CategoryModel> updates, List<Integer> categoryIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updates");
+        return null;
+    }
+
 }

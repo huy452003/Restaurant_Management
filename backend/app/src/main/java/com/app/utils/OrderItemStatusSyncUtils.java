@@ -35,7 +35,8 @@ public final class OrderItemStatusSyncUtils {
         return changed;
     }
 
-    static OrderStatus resolveItemStatusForOrder(OrderStatus current, OrderStatus orderStatus) {
+    // xác định trạng thái món theo đơn
+    public static OrderStatus resolveItemStatusForOrder(OrderStatus current, OrderStatus orderStatus) {
         if (orderStatus == OrderStatus.CANCELLED) {
             return OrderStatus.CANCELLED;
         }

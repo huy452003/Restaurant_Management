@@ -15,12 +15,10 @@ public final class TableLookupUtils {
     private TableLookupUtils() {
     }
 
+    // lấy bàn từ database
     public static TableEntity requireTable(
-        TableRepository tableRepository,
-        Integer tableNumber,
-        String modelName,
-        LogContext logContext,
-        LoggingService log
+        TableRepository tableRepository, Integer tableNumber,
+        String modelName, LogContext logContext, LoggingService log
     ) {
         return tableRepository.findByTableNumber(tableNumber).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
@@ -33,12 +31,10 @@ public final class TableLookupUtils {
         });
     }
 
+    // tìm bàn có sẵn
     public static TableEntity requireAvailableTable(
-        TableRepository tableRepository,
-        Integer tableNumber,
-        String modelName,
-        LogContext logContext,
-        LoggingService log
+        TableRepository tableRepository, Integer tableNumber,
+        String modelName, LogContext logContext, LoggingService log
     ) {
         return tableRepository.findByTableNumberAndTableStatus(tableNumber, TableStatus.AVAILABLE)
             .orElseThrow(() -> {

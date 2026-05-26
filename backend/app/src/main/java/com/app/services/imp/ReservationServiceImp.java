@@ -1,7 +1,10 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.app.services.ReservationService;
@@ -36,14 +39,17 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
-import jakarta.transaction.Transactional;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -97,6 +103,7 @@ public class ReservationServiceImp implements ReservationService {
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
     @Override
+    @CircuitBreaker(name = "reservation-service-admin-read", fallbackMethod = "filtersForCustomerFallback")
     public Page<ReservationModel> filtersForCustomer(
         Integer id, Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
         Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable
@@ -109,6 +116,7 @@ public class ReservationServiceImp implements ReservationService {
     }
 
     @Override
+    @CircuitBreaker(name = "reservation-service-admin-read", fallbackMethod = "filtersForAdminFallback")
     public Page<ReservationModel> filtersForAdmin(
         Integer id, String customerName, String customerPhone, String customerEmail,
         Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
@@ -179,7 +187,8 @@ public class ReservationServiceImp implements ReservationService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "reservation-service-write", fallbackMethod = "createFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public List<ReservationModel> create(List<ReservationCustomerCreateModel> reservations) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating reservations ...!", logContext);
@@ -231,7 +240,9 @@ public class ReservationServiceImp implements ReservationService {
     }
     
     @Override
-    @Transactional
+    @CircuitBreaker(name = "reservation-service-write", fallbackMethod = "updateForCustomerFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public ReservationModel updateForCustomer(
         ReservationCustomerUpdateModel update, Integer reservationId
     ) {
@@ -300,13 +311,13 @@ public class ReservationServiceImp implements ReservationService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "reservation-service-admin-write", fallbackMethod = "updateByAdminFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<ReservationModel> updateByAdmin(
         List<ReservationAdminRequestModel> updates, List<Integer> reservationIds
     ) {
-        LogContext logContext = getLogContext(
-            "updateByAdmin", reservationIds != null ? reservationIds : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("updateByAdmin", reservationIds);
         log.logInfo("Updating reservations by admin/manager ...!", logContext);
 
         if (updates.size() != reservationIds.size()) {
@@ -412,7 +423,9 @@ public class ReservationServiceImp implements ReservationService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "reservation-service-write", fallbackMethod = "cancelFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public ReservationModel cancel(Integer reservationId) {
         LogContext logContext = getLogContext("cancel", Collections.singletonList(reservationId));
         log.logInfo("Cancelling reservation ...!", logContext);
@@ -455,6 +468,7 @@ public class ReservationServiceImp implements ReservationService {
     }
 
     @Override
+    @CircuitBreaker(name = "reservation-service-read", fallbackMethod = "getTimeSlotAvailabilityFallback")
     public ReservationAvailabilityModel getTimeSlotAvailability(Integer tableNumber, LocalDate date) {
         LogContext logContext = getLogContext("getTimeSlotAvailability", Collections.emptyList());
         
@@ -497,8 +511,9 @@ public class ReservationServiceImp implements ReservationService {
         return new ReservationAvailabilityModel(tableNumber, date, bookedTimes);
     }
 
-    // private method
+    // ======================================== Helper Methods ========================================
 
+    // đồng bộ trạng thái bàn khi reservation thay đổi
     private void syncTableForReservation(ReservationEntity reservation) {
         if (reservation.getTable() != null) {
             tableStatusSyncService.syncTableStatus(reservation.getTable().getTableNumber());
@@ -533,52 +548,54 @@ public class ReservationServiceImp implements ReservationService {
 
     // Đồng bộ vòng đời trạng thái bàn khi reservation thay đổi (đổi bàn/hủy/chuyển terminal).
     private void applyTableTransition(
-        ReservationEntity current, Integer newTableNumber,
-        LocalDate newDate, LocalTime newTime, ReservationStatus requestedStatus, Integer numberOfGuests,
-        LogContext logContext
+        ReservationEntity current, Integer newTableNumber, LocalDate newDate, 
+        LocalTime newTime, ReservationStatus requestedStatus, 
+        Integer numberOfGuests, LogContext logContext
     ) {
+        // lấy trạng thái đặt bàn mới
         ReservationStatus targetStatus = requestedStatus != null ? requestedStatus : current.getReservationStatus();
+        // lấy ngày đặt bàn mới
         LocalDate targetDate = newDate != null ? newDate : current.getReservationDate();
+        // lấy giờ đặt bàn mới
         LocalTime targetTime = newTime != null ? newTime : current.getReservationTime();
+        // kiểm tra xem bàn có thay đổi không
         boolean isTableChanged = !Objects.equals(newTableNumber, current.getTable().getTableNumber());
 
+        // nếu trạng thái đặt bàn là terminal thì không cần kiểm tra
         if (ReservationHoldUtils.isTerminal(targetStatus)) {
             return;
         }
 
+        // kiểm tra và áp dụng trạng thái bàn
         validateAndApplyTableBooking(
-            newTableNumber,
-            numberOfGuests,
-            targetDate,
-            targetTime,
-            current.getId(),
-            isTableChanged,
-            logContext
+            newTableNumber, numberOfGuests,
+            targetDate, targetTime, current.getId(),
+            isTableChanged, logContext
         );
     }
 
     // Validate nghiệp vụ đặt bàn (capacity, timeslot conflict, near-time reserve) và áp dụng trạng thái bàn.
     private void validateAndApplyTableBooking(
-        Integer tableNumber,
-        Integer numberOfGuests,
-        LocalDate reservationDate,
-        LocalTime reservationTime,
-        Integer excludeReservationId,
-        boolean requireTableAvailableInNearWindow,
-        LogContext logContext
+        Integer tableNumber, Integer numberOfGuests, LocalDate reservationDate,
+        LocalTime reservationTime, Integer excludeReservationId,
+        boolean requireTableAvailableInNearWindow, LogContext logContext
     ) {
         validateSchedule(reservationDate, reservationTime, logContext);
         validateCapacityForTable(tableNumber, numberOfGuests, logContext);
+        // kiểm tra xem có order nào đang giữ slot / khóa bàn vận hành không
         TableHoldGuard.assertNoHoldingOrderOnTable(
             orderRepository, tableNumber, null, "ReservationModel", logContext, log
         );
+        // kiểm tra xem có slot đặt bàn nào trùng với slot đặt không
         ensureSlotAvailable(tableNumber, reservationDate, reservationTime, excludeReservationId, logContext);
 
+        // kiểm tra xem giờ đặt bàn có trong cửa sổ gần giờ hiện tại không
         if (!ReservationTimeSlots.isNearWindow(reservationDate, reservationTime)) {
             return;
         }
 
-        if (requireTableAvailableInNearWindow) {
+        // nếu bàn có sẵn thì không cần kiểm tra
+        if (requireTableAvailableInNearWindow) {     
             TableLookupUtils.requireAvailableTable(
                 tableRepository, tableNumber, "ReservationModel", logContext, log
             );
@@ -588,11 +605,14 @@ public class ReservationServiceImp implements ReservationService {
         TableEntity table = TableLookupUtils.requireTable(
             tableRepository, tableNumber, "ReservationModel", logContext, log
         );
+
+        // nếu bàn có sẵn hoặc đã đặt trước thì không cần kiểm tra
         TableStatus status = table.getTableStatus();
         if (status == TableStatus.AVAILABLE || status == TableStatus.RESERVED) {
             return;
         }
 
+        // nếu bàn không sẵn hoặc đã đặt trước thì throw lỗi
         ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
             "Table is not available for reservation in near-time window: " + tableNumber,
             "ReservationModel",
@@ -602,13 +622,49 @@ public class ReservationServiceImp implements ReservationService {
         throw e;
     }
 
+    // validate schedule của reservation
+    private void validateSchedule(LocalDate reservationDate, LocalTime reservationTime, LogContext logContext) {
+        // ngày và giờ đặt bàn không được null
+        if (reservationDate == null || reservationTime == null) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservationDate and reservationTime must not be null",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        // giờ đặt bàn phải là giữa 10:00 và 21:30 và nằm khoảng 30 phút
+        if (!ReservationTimeSlots.isValidSlot(reservationTime)) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservationTime must be a 30-minute slot between 10:00 and 21:30",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+        // kiểm tra xem giờ đặt bàn có phải giờ đã qua rồi không
+        if (ReservationTimeSlots.isPastSlot(reservationDate, reservationTime, LocalDateTime.now())) {
+            ValidationExceptionHandle e = new ValidationExceptionHandle(
+                "reservation schedule must not be in the past",
+                Collections.emptyList(),
+                "ReservationModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            throw e;
+        }
+    }
+
     // Kiểm tra sức chứa của bàn có đáp ứng số khách hay không.
     private void validateCapacityForTable(
         Integer tableNumber, Integer numberOfGuests, LogContext logContext
     ) {
+        // bàn phải tồn tại
         TableEntity table = TableLookupUtils.requireTable(
             tableRepository, tableNumber, "ReservationModel", logContext, log
         );
+        // số khách phải lớn hơn 0
         if (numberOfGuests == null || numberOfGuests < 1) {
             ValidationExceptionHandle e = new ValidationExceptionHandle(
                 "numberOfGuests must be at least 1",
@@ -618,6 +674,7 @@ public class ReservationServiceImp implements ReservationService {
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
+        // số khách phải nhỏ hơn sức chứa của bàn
         if (table.getCapacity() < numberOfGuests) {
             ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
                 "Table " + table.getTableNumber() + " holds up to " + table.getCapacity()
@@ -630,45 +687,15 @@ public class ReservationServiceImp implements ReservationService {
         }
     }
 
-    private void validateSchedule(LocalDate reservationDate, LocalTime reservationTime, LogContext logContext) {
-        if (reservationDate == null || reservationTime == null) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "reservationDate and reservationTime must not be null",
-                Collections.emptyList(),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-        if (!ReservationTimeSlots.isValidSlot(reservationTime)) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "reservationTime must be a 30-minute slot between 10:00 and 21:30",
-                Collections.emptyList(),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-        if (ReservationTimeSlots.isPastSlot(reservationDate, reservationTime, LocalDateTime.now())) {
-            ValidationExceptionHandle e = new ValidationExceptionHandle(
-                "reservation schedule must not be in the past",
-                Collections.emptyList(),
-                "ReservationModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            throw e;
-        }
-    }
-
+    // kiểm tra xem có slot đặt bàn nào trùng với slot đặt không
     private void ensureSlotAvailable(
-        Integer tableNumber,
-        LocalDate reservationDate,
-        LocalTime reservationTime,
-        Integer excludeReservationId,
+        Integer tableNumber, LocalDate reservationDate,
+        LocalTime reservationTime, Integer excludeReservationId,
         LogContext logContext
     ) {
         if (!reservationRepository.existsActiveSlot(
-            tableNumber, reservationDate, reservationTime, ReservationHoldUtils.ACTIVE_HOLD_STATUSES, excludeReservationId
+            tableNumber, reservationDate, reservationTime, 
+            ReservationHoldUtils.ACTIVE_HOLD_STATUSES, excludeReservationId
         )) {
             return;
         }
@@ -719,4 +746,110 @@ public class ReservationServiceImp implements ReservationService {
         }
         return conditions;
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<ReservationModel> filtersForCustomerFallback(
+        Integer id, Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<ReservationEntity>> conditions = buildFilterConditions(
+            id, null, null, null,
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            RESERVATION_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<ReservationModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, ReservationModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersForCustomer", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filtersForCustomer", e);
+    }
+
+    @SuppressWarnings("unused")
+    private Page<ReservationModel> filtersForAdminFallback(
+        Integer id, String customerName, String customerPhone, String customerEmail,
+        Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
+        Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<ReservationEntity>> conditions = buildFilterConditions(
+            id, customerName, customerPhone, customerEmail,
+            tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            RESERVATION_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<ReservationModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, ReservationModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersForAdmin", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filtersForAdmin", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<ReservationModel> createFallback(List<ReservationCustomerCreateModel> reservations, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "create");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ReservationModel updateForCustomerFallback(ReservationCustomerUpdateModel update, Integer reservationId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateForCustomer");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private List<ReservationModel> updateByAdminFallback(List<ReservationAdminRequestModel> updates, List<Integer> reservationIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateByAdmin");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ReservationModel cancelFallback(Integer reservationId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "cancel");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ReservationAvailabilityModel getTimeSlotAvailabilityFallback(Integer tableNumber, LocalDate date, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "getTimeSlotAvailability");
+        return null;
+    }
+    
 }

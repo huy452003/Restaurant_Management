@@ -8,7 +8,7 @@ import {
 } from "@/lib/shiftApiFormat";
 import type { PaginatedResponse, ShiftModel, UserModel, UserRole } from "@/lib/api/types";
 
-const ELIGIBLE_ROLES: UserRole[] = ["MANAGER", "CHEF", "CASHIER"];
+const ELIGIBLE_ROLES: UserRole[] = ["MANAGER", "CASHIER"];
 
 type Props = {
   open: boolean;

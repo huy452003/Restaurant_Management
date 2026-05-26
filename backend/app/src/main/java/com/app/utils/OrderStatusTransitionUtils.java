@@ -29,16 +29,19 @@ public final class OrderStatusTransitionUtils {
     private OrderStatusTransitionUtils() {
     }
 
+    // áp dụng trạng thái mới với đơn chưa thanh toán đủ
     public static void applyOrderStatusTransition(OrderEntity order, OrderStatus targetStatus) {
         applyOrderStatusTransition(order, targetStatus, false);
     }
 
+    // áp dụng trạng thái mới của order
     public static void applyOrderStatusTransition(
         OrderEntity order,
         OrderStatus targetStatus,
         boolean hasCompletedPayment
     ) {
         OrderStatus oldStatus = order.getOrderStatus();
+        // nếu không được phép chuyển sang trạng thái mới thì throw exception
         if (!isAllowedTransition(oldStatus, targetStatus, hasCompletedPayment)) {
             throw new ValidationExceptionHandle(
                 "Invalid order status transition from " + oldStatus + " to " + targetStatus,
@@ -46,18 +49,18 @@ public final class OrderStatusTransitionUtils {
                 "OrderModel"
             );
         }
+        
         order.setOrderStatus(targetStatus);
 
+        // nếu trạng thái mới là COMPLETED hoặc CANCELLED thì đặt thời gian hoàn thành
         if (!Objects.equals(oldStatus, targetStatus)) {
             if (targetStatus == OrderStatus.COMPLETED || targetStatus == OrderStatus.CANCELLED) {
                 order.setCompletedAt(LocalDateTime.now());
-            } else if (oldStatus == OrderStatus.COMPLETED || oldStatus == OrderStatus.CANCELLED) {
-                order.setCompletedAt(null);
             }
         }
     }
 
-    /** Sau thanh toán đủ tiền khi đơn đang CONFIRMED — không qua form staff. */
+    /** Sau khi thanh toán đủ tiền thì đơn chuyển sang trạng thái PREPARING — không qua form staff. */
     public static boolean applyPreparingAfterFullPayment(OrderEntity order) {
         if (order == null || order.getOrderStatus() != OrderStatus.CONFIRMED) {
             return false;
@@ -66,6 +69,10 @@ public final class OrderStatusTransitionUtils {
         return true;
     }
 
+    // kiểm tra xem trạng thái của order có được phép chuyển sang trạng thái mới không
+    // oldStatus: trạng thái hiện tại của order
+    // targetStatus: trạng thái mới của order
+    // hasCompletedPayment: có thanh toán đủ chưa
     public static boolean isAllowedTransition(
         OrderStatus oldStatus,
         OrderStatus targetStatus,
@@ -74,29 +81,38 @@ public final class OrderStatusTransitionUtils {
         if (oldStatus == null || targetStatus == null) {
             return false;
         }
+        // nếu trạng thái hiện tại và trạng thái mới giống nhau thì được phép chuyển
         if (Objects.equals(oldStatus, targetStatus)) {
             return true;
         }
+        // nếu trạng thái hiện tại là CANCELLED hoặc COMPLETED thì không được phép chuyển
         if (oldStatus == OrderStatus.CANCELLED || oldStatus == OrderStatus.COMPLETED) {
             return false;
         }
+        // nếu trạng thái mới là CANCELLED thì không được phép chuyển nếu đã thanh toán
         if (targetStatus == OrderStatus.CANCELLED) {
             return !hasCompletedPayment;
         }
+        // nếu trạng thái mới là COMPLETED thì không được phép chuyển nếu đơn không phải là PREPARING và đã thanh toán
         if (targetStatus == OrderStatus.COMPLETED) {
             return oldStatus == OrderStatus.PREPARING && hasCompletedPayment;
         }
+        // nếu trạng thái hiện tại là CONFIRMED và trạng thái mới là PREPARING thì không được phép chuyển
+        // vì phải thanh toán đủ mới chuyển sang PREPARING
         if (oldStatus == OrderStatus.CONFIRMED && targetStatus == OrderStatus.PREPARING) {
             return false;
         }
         int fromIdx = FORWARD_PIPELINE.indexOf(oldStatus);
         int toIdx = FORWARD_PIPELINE.indexOf(targetStatus);
+        // là status completed hoặc cancelled không nằm trong pipeline thì không được phép chuyển
         if (fromIdx < 0 || toIdx < 0) {
             return false;
         }
+        // phải chuyển từ trạng thái trước sang trạng thái sau trong pipeline
         return toIdx > fromIdx;
     }
 
+    // lấy tất cả các trạng thái được phép chuyển sang từ trạng thái hiện tại
     public static List<OrderStatus> allowedTargetStatuses(
         OrderStatus current,
         boolean hasCompletedPayment
@@ -119,6 +135,7 @@ public final class OrderStatusTransitionUtils {
         return allowed;
     }
 
+    // kiểm tra xem khách hàng có thể hủy đơn không
     public static boolean canCustomerCancel(OrderStatus current, boolean hasCompletedPayment) {
         if (current != OrderStatus.PENDING && current != OrderStatus.CONFIRMED) {
             return false;

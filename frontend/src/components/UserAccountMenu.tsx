@@ -7,7 +7,7 @@ import { useAuth } from "@/context/auth-context";
 import type { UserRole } from "@/lib/api/types";
 import { STAFF_ROLE_LABEL_VI } from "@/lib/staff/role-labels";
 
-const STAFF_ROLES: UserRole[] = ["ADMIN", "MANAGER", "CASHIER", "CHEF"];
+const STAFF_ROLES: UserRole[] = ["ADMIN", "MANAGER", "CASHIER"];
 
 export function UserAccountMenu() {
   const { user, logout, hasRole } = useAuth();

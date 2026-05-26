@@ -8,9 +8,11 @@ import com.common.models.PaginatedResponse;
 import com.common.models.Response;
 import com.common.models.category.CategoryModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 
@@ -55,6 +57,7 @@ public class CategoryController {
 
     @GetMapping("/filters")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-read", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<CategoryModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -82,6 +85,7 @@ public class CategoryController {
 
     @PostMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "category-controller-staff-write", fallbackMethod = "createsFallback")
     public ResponseEntity<Response<List<CategoryModel>>> create(
         Locale locale,
         @RequestBody @Valid List<CategoryModel> categories
@@ -89,7 +93,7 @@ public class CategoryController {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        List<CategoryModel> created = categoryService.create(categories);
+        List<CategoryModel> created = categoryService.creates(categories);
         Response<List<CategoryModel>> response = new Response<>(
             201,
             messageSource.getMessage("response.message.createCategoriesSuccess", null, locale),
@@ -103,6 +107,7 @@ public class CategoryController {
 
     @PutMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "category-controller-staff-write", fallbackMethod = "updatesFallback")
     public ResponseEntity<Response<List<CategoryModel>>> update(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<CategoryModel> request
@@ -113,7 +118,7 @@ public class CategoryController {
         );
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        List<CategoryModel> updated = categoryService.update(request.getUpdates(), request.getIds());
+        List<CategoryModel> updated = categoryService.updates(request.getUpdates(), request.getIds());
         Response<List<CategoryModel>> response = new Response<>(
             200,
             messageSource.getMessage("response.message.updateCategoriesSuccess", null, locale),
@@ -125,4 +130,31 @@ public class CategoryController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<CategoryModel>>> filtersFallback(
+        Locale locale, Integer id, String name, 
+        CategoryStatus categoryStatus, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filters");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<CategoryModel>>> createsFallback(
+        Locale locale, List<CategoryModel> categories, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "creates");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<CategoryModel>>> updatesFallback(
+        Locale locale, WrapperUpdateRequest<CategoryModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updates");
+        return null;
+    }
+    
 }

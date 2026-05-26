@@ -1,7 +1,10 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.app.services.ShiftService;
 import com.app.utils.UserEntityUtils;
@@ -20,12 +23,17 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -69,6 +77,7 @@ public class ShiftServiceImp implements ShiftService {
     private static final String SHIFT_REDIS_KEY_PREFIX = "shift:";
 
     @Override
+    @CircuitBreaker(name = "shift-service-read", fallbackMethod = "filtersFallback")
     public Page<ShiftModel> filters(
         Integer id, LocalDate shiftDate, 
         LocalDateTime startTime, LocalDateTime endTime,
@@ -85,7 +94,6 @@ public class ShiftServiceImp implements ShiftService {
             "ShiftModel", logContext, log
         );
         if (
-            currentUser.getRole() == UserRole.CHEF || 
             currentUser.getRole() == UserRole.CASHIER
         ) {
             conditions.add(FilterCondition.eq("employee.id", currentUser.getId()));
@@ -130,6 +138,8 @@ public class ShiftServiceImp implements ShiftService {
     }
 
     @Override
+    @CircuitBreaker(name = "shift-service-write", fallbackMethod = "createFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public List<ShiftModel> create(List<ShiftModel> shifts) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating shifts ...!", logContext);
@@ -180,10 +190,11 @@ public class ShiftServiceImp implements ShiftService {
     }
     
     @Override
+    @CircuitBreaker(name = "shift-service-write", fallbackMethod = "updateFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<ShiftModel> update(List<ShiftModel> updates, List<Integer> shiftIds) {
-        LogContext logContext = getLogContext(
-            "update", shiftIds != null ? shiftIds : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("update", shiftIds);
         log.logInfo("Updating shifts ...!", logContext);
 
         if(updates.size() != shiftIds.size()){
@@ -267,7 +278,7 @@ public class ShiftServiceImp implements ShiftService {
         ).collect(Collectors.toList());
     }
 
-    // private method
+    // ======================================== Helper Methods ========================================
 
     private ShiftModel toShiftModel(ShiftEntity entity) {
         ShiftModel shiftModel = modelMapper.map(entity, ShiftModel.class);
@@ -280,8 +291,7 @@ public class ShiftServiceImp implements ShiftService {
         return shiftModel;
     }
 
-    
-
+    // validate role của employee
     private void validateRole(List<ShiftModel> shifts, LogContext logContext) {
         List<Object> invalidFields = new ArrayList<>();
         for(ShiftModel shift : shifts) {
@@ -289,14 +299,13 @@ public class ShiftServiceImp implements ShiftService {
                 shift.getEmployeeId(), "UserModel", logContext, log
             );
             if(!Objects.equals(employee.getRole(), UserRole.MANAGER) &&
-               !Objects.equals(employee.getRole(), UserRole.CHEF) &&
                !Objects.equals(employee.getRole(), UserRole.CASHIER)
             ) {
                 Map<String, Object> invalidField = new HashMap<>();
                 invalidField.put("employeeId", shift.getEmployeeId());
                 invalidField.put("field", "role");
                 invalidField.put("value", employee.getRole());
-                invalidField.put("message", "Employee role must be MANAGER, CHEF or CASHIER");
+                invalidField.put("message", "Employee role must be MANAGER or CASHIER");
                 invalidFields.add(invalidField);
             }
             invalidFields.addAll(validateShiftTimeFields(shift));
@@ -434,4 +443,55 @@ public class ShiftServiceImp implements ShiftService {
         }
         return conditions;
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<ShiftModel> filtersFallback(
+        Integer id, LocalDate shiftDate, LocalDateTime startTime, 
+        LocalDateTime endTime, ShiftStatus shiftStatus,
+        Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<ShiftEntity>> conditions = buildFilterConditions(
+            id, shiftDate, startTime, endTime, shiftStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            SHIFT_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<ShiftModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, ShiftModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<ShiftModel> createFallback(List<ShiftModel> shifts, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<ShiftModel> updateFallback(List<ShiftModel> updates, List<Integer> shiftIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "update");
+        return null;
+    }
+    
 }

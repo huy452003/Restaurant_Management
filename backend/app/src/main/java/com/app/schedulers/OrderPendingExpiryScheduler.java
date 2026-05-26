@@ -15,6 +15,7 @@ public class OrderPendingExpiryScheduler {
     @Autowired
     private LoggingService log;
 
+    // scheduler hủy đơn PENDING quá hạn (giải phóng bàn cho giỏ hàng / đặt bàn khác)
     @Scheduled(fixedRateString = "${order.pending.expiry-check-interval-ms:60000}")
     public void expireStalePendingOrders() {
         LogContext logContext = LogContext.builder()

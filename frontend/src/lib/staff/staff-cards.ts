@@ -56,7 +56,7 @@ export const STAFF_CARDS: StaffCardConfig[] = [
     href: "/staff/shifts",
     title: "Ca làm",
     desc: "Lịch ca làm nhân viên.",
-    accessRoles: ["ADMIN", "MANAGER", "CHEF", "CASHIER"],
+    accessRoles: ["ADMIN", "MANAGER", "CASHIER"],
   },
   {
     href: "/staff/payments",

@@ -22,9 +22,7 @@ public final class VnpaySignatureUtils {
     private VnpaySignatureUtils() {
     }
 
-    /**
-     * Gom tham số request thành map một giá trị (dùng cho IPN/Return query).
-     */
+    // gom tham số request thành map một giá trị (dùng cho IPN/Return query)
     public static TreeMap<String, String> toSortedVnpParams(HttpServletRequest request) {
         // Đọc toàn bộ query/form vào TreeMap để ký / verify giống thứ tự VNPAY.
         TreeMap<String, String> sorted = new TreeMap<>();

@@ -34,8 +34,12 @@ import com.common.models.order.OrderAdminRequestModel;
 import com.common.models.order.OrderCustomerRequestModel;
 import com.common.models.order.OrderModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.common.models.Response;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -64,6 +68,7 @@ public class OrderController {
 
     @GetMapping("/filters")
     @PreAuthorize("hasRole('CUSTOMER')")
+    @RateLimiter(name = "order-controller-customer-read", fallbackMethod = "filtersForCustomerFallback")
     public ResponseEntity<Response<PaginatedResponse<OrderModel>>> filtersForCustomer(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -98,6 +103,7 @@ public class OrderController {
 
     @GetMapping("/filters/admin")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    @RateLimiter(name = "order-controller-staff-read", fallbackMethod = "filtersForAdminFallback")
     public ResponseEntity<Response<PaginatedResponse<OrderModel>>> filtersForAdmin(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -136,6 +142,7 @@ public class OrderController {
     
     @PostMapping("")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-write", fallbackMethod = "createFallback")
     public ResponseEntity<Response<OrderModel>> create(
         Locale locale,
         @RequestBody @Valid OrderCustomerRequestModel order
@@ -155,9 +162,9 @@ public class OrderController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PatchMapping("/{orderId}")
     @PreAuthorize("hasAnyRole('CUSTOMER')")
+    @RateLimiter(name = "order-controller-customer-write", fallbackMethod = "updateFallback")
     public ResponseEntity<Response<OrderModel>> update(
         Locale locale,
         @RequestBody @Valid OrderCustomerRequestModel request,
@@ -180,6 +187,7 @@ public class OrderController {
 
     @PutMapping("/admin")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    @RateLimiter(name = "order-controller-staff-write", fallbackMethod = "updateByAdminFallback")
     public ResponseEntity<Response<List<OrderModel>>> updateByAdmin(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<OrderAdminRequestModel> request
@@ -201,9 +209,9 @@ public class OrderController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PatchMapping("/submit/{orderId}")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-write", fallbackMethod = "submitFallback")
     public ResponseEntity<Response<OrderModel>> submit(
         Locale locale,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}")
@@ -226,6 +234,7 @@ public class OrderController {
 
     @PatchMapping("/cancel/{orderId}")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-write", fallbackMethod = "cancelFallback")
     public ResponseEntity<Response<OrderModel>> cancel(
         Locale locale,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}")
@@ -245,4 +254,65 @@ public class OrderController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<OrderModel>>> filtersForCustomerFallback(
+        Locale locale, Integer id, String orderNumber, Integer tableNumber, 
+        OrderStatus orderStatus, OrderType orderType, BigDecimal subTotal, 
+        BigDecimal tax, BigDecimal totalAmount, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersForCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<OrderModel>>> filtersForAdminFallback(
+        Locale locale, Integer id, String orderNumber, Integer tableNumber, Integer waiterId, String customerName, String customerPhone, String customerEmail, OrderStatus orderStatus, OrderType orderType, BigDecimal subTotal, BigDecimal tax, BigDecimal totalAmount, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersForAdmin");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<OrderModel>> createFallback(
+        Locale locale, OrderCustomerRequestModel order, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "create");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<OrderModel>> updateFallback(
+        Locale locale, OrderCustomerRequestModel request, Integer orderId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "update");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<OrderModel>>> updateByAdminFallback(
+        Locale locale, WrapperUpdateRequest<OrderAdminRequestModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateByAdmin");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<OrderModel>> submitFallback(
+        Locale locale, Integer orderId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "submit");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<OrderModel>> cancelFallback(
+        Locale locale, Integer orderId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "cancel");
+        return null;
+    }
+    
 }

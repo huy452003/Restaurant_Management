@@ -38,6 +38,8 @@ public class OrderItemStatusSyncServiceImp implements OrderItemStatusSyncService
         List<OrderItemEntity> items = orderItemRepository.findByOrder_IdIn(
             Collections.singletonList(orderId)
         );
+        // đồng bộ trạng thái món theo đơn khi đơn đổi trạng thái.
+        // VD: đơn đổi từ PENDING sang PREPARING, thì tất cả order items của đơn đó sẽ đổi từ PENDING sang PREPARING.
         List<OrderItemEntity> changed = OrderItemStatusSyncUtils.syncItemsWithOrderStatus(items, newStatus);
         if (!changed.isEmpty()) {
             orderItemRepository.saveAll(changed);

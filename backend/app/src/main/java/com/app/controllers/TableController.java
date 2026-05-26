@@ -9,9 +9,11 @@ import com.common.models.Response;
 import com.common.models.table.TableModel;
 import com.common.models.table.TableRequestModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -59,6 +61,7 @@ public class TableController {
 
     @GetMapping("/filters")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-read", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<TableModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -91,6 +94,7 @@ public class TableController {
 
     @PostMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "table-controller-staff-write", fallbackMethod = "createFallback")
     public ResponseEntity<Response<List<TableModel>>> create(
         Locale locale,
         @RequestBody @Valid List<TableRequestModel> tables
@@ -112,6 +116,7 @@ public class TableController {
 
     @PutMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "table-controller-staff-write", fallbackMethod = "updateFallback")
     public ResponseEntity<Response<List<TableModel>>> update(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<TableRequestModel> request
@@ -136,6 +141,7 @@ public class TableController {
 
     @PatchMapping("/status/available/{tableId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    @RateLimiter(name = "table-controller-staff-write", fallbackMethod = "markAvailableFallback")
     public ResponseEntity<Response<TableModel>> markAvailable(
         Locale locale,
         @PathVariable @NotNull @Min(1) Integer tableId
@@ -153,6 +159,43 @@ public class TableController {
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<TableModel>>> filtersFallback(
+        Locale locale, Integer id, Integer tableNumber, 
+        Integer capacity, TableStatus tableStatus, String location, 
+        boolean excludeTablesWithPendingOrder, 
+        boolean freshSnapshot, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersFallback");
+        return null;
+    }       
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<TableModel>>> createFallback(
+        Locale locale, List<TableRequestModel> tables, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "createFallback");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<TableModel>>> updateFallback(
+        Locale locale, WrapperUpdateRequest<TableRequestModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateFallback");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<TableModel>> markAvailableFallback(
+        Locale locale, Integer tableId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "markAvailableFallback");
+        return null;
     }
 
 }

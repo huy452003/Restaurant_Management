@@ -24,30 +24,45 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, Integer>
     Optional<PaymentEntity> findFirstByOrder_IdAndPaymentMethodAndPaymentStatus(
         Integer orderId, PaymentMethod paymentMethod, PaymentStatus paymentStatus
     );
-    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM PaymentEntity p WHERE p.orderId = :orderId AND p.paymentStatus IN (:statuses)")
-    BigDecimal sumAmountByOrderIdAndPaymentStatuses(@Param("orderId") Integer orderId, @Param("statuses") Collection<PaymentStatus> statuses);
 
-    @Query(
-        "SELECT p.orderId, COALESCE(SUM(p.amount), 0) FROM PaymentEntity p "
-            + "WHERE p.orderId IN :orderIds AND p.paymentStatus IN (:statuses) GROUP BY p.orderId"
-    )
+    // lấy tổng số tiền đã allocated của order đó trong statuses
+    @Query("""
+            SELECT COALESCE(SUM(p.amount), 0) AS allocatedAmount
+            FROM PaymentEntity p 
+            WHERE p.orderId = :orderId AND p.paymentStatus IN (:statuses)
+        """)
+    BigDecimal sumAmountByOrderIdAndPaymentStatuses(
+        @Param("orderId") Integer orderId, 
+        @Param("statuses") Collection<PaymentStatus> statuses
+    );
+
+    // lấy tất cả các order id và số tiền đã allocated của order đó trong statuses
+    @Query("""
+            SELECT p.orderId AS orderId, COALESCE(SUM(p.amount), 0) AS allocatedAmount
+            FROM PaymentEntity p
+            WHERE p.orderId IN :orderIds AND p.paymentStatus IN (:statuses)
+            GROUP BY p.orderId
+        """)
     List<Object[]> sumAllocatedAmountsByOrderIds(
         @Param("orderIds") Collection<Integer> orderIds,
         @Param("statuses") Collection<PaymentStatus> statuses
     );
 
+    // lấy tất cả các order id có payment status được truyền vào
+    @Query("""
+            SELECT DISTINCT p.orderId AS orderId
+            FROM PaymentEntity p
+            WHERE p.orderId IN :orderIds AND p.paymentStatus = :status
+        """)
+    List<Integer> findDistinctOrderIdsByOrderIdInAndPaymentStatus(
+        @Param("orderIds") Collection<Integer> orderIds,
+        @Param("status") PaymentStatus status
+    );
+
+    // lấy tổng số tiền đã allocated của order đó trong status COMPLETED
     default BigDecimal sumCompletedAmountByOrderId(Integer orderId) {
         return sumAmountByOrderIdAndPaymentStatuses(orderId, List.of(PaymentStatus.COMPLETED));
     }
 
     boolean existsByOrderIdAndPaymentStatus(Integer orderId, PaymentStatus paymentStatus);
-
-    @Query(
-        "SELECT DISTINCT p.orderId FROM PaymentEntity p "
-            + "WHERE p.orderId IN :orderIds AND p.paymentStatus = :status"
-    )
-    List<Integer> findDistinctOrderIdsByOrderIdInAndPaymentStatus(
-        @Param("orderIds") Collection<Integer> orderIds,
-        @Param("status") PaymentStatus status
-    );
 }

@@ -2,7 +2,9 @@ package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -11,7 +13,6 @@ import com.app.services.OrderService;
 import com.app.services.PaymentService;
 import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
-import com.app.utils.OrderTableHoldUtils;
 import com.app.utils.TableHoldGuard;
 import com.app.utils.TableLookupUtils;
 import com.app.utils.UserEntityUtils;
@@ -40,13 +41,17 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -60,7 +65,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -114,6 +118,7 @@ public class OrderServiceImp implements OrderService {
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
     @Override
+    @CircuitBreaker(name = "order-service-read", fallbackMethod = "filtersForCustomerFallback")
     public Page<OrderModel> filtersForCustomer(
         Integer id, String orderNumber, Integer tableNumber,
         OrderStatus orderStatus, OrderType orderType, BigDecimal subTotal,
@@ -128,6 +133,7 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
+    @CircuitBreaker(name = "order-service-admin-read", fallbackMethod = "filtersForAdminFallback")
     public Page<OrderModel> filtersForAdmin(
         Integer id, String orderNumber, Integer tableNumber, Integer waiterId,
         String customerName, String customerPhone, String customerEmail,
@@ -188,6 +194,7 @@ public class OrderServiceImp implements OrderService {
         List<OrderModel> pageDatas = pageEntities.getContent().stream().map(
             this::toOrderModelWithoutItemCount
         ).collect(Collectors.toList());
+
         applyTotalOrderItemCounts(pageEntities.getContent(), pageDatas);
         applyCanAcceptPayment(pageEntities.getContent(), pageDatas);
         applyAllowedOrderStatuses(pageEntities.getContent(), pageDatas);
@@ -205,6 +212,8 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
+    @CircuitBreaker(name = "order-service-write", fallbackMethod = "createFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public OrderModel create(OrderCustomerRequestModel order) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating order ...!", logContext);
@@ -237,6 +246,9 @@ public class OrderServiceImp implements OrderService {
     }
     
     @Override
+    @CircuitBreaker(name = "order-service-write", fallbackMethod = "updateForCustomerFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public OrderModel updateForCustomer(OrderCustomerRequestModel update, Integer orderId) {
         LogContext logContext = getLogContext(
             "update", Collections.singletonList(orderId)
@@ -280,10 +292,11 @@ public class OrderServiceImp implements OrderService {
     }
     
     @Override
+    @CircuitBreaker(name = "order-service-admin-write", fallbackMethod = "updateByAdminFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<OrderModel> updateByAdmin(List<OrderAdminRequestModel> updates, List<Integer> orderIds) {
-        LogContext logContext = getLogContext(
-            "updateByAdmin", orderIds != null ? orderIds : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("updateByAdmin", orderIds);
         log.logInfo("Updating orders by staff ...!", logContext);
 
         UserEntity actingUser = userEntityUtils.requireAuthenticatedUser(
@@ -409,6 +422,9 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
+    @CircuitBreaker(name = "order-service-write", fallbackMethod = "submitFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public OrderModel submit(Integer orderId) {
         LogContext logContext = getLogContext("submit", Collections.singletonList(orderId));
         log.logInfo("Submitting order ...!", logContext);
@@ -457,6 +473,9 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
+    @CircuitBreaker(name = "order-service-write", fallbackMethod = "cancelFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public OrderModel cancel(Integer orderId) {
         LogContext logContext = getLogContext("cancel", Collections.singletonList(orderId));
         log.logInfo("Cancelling order ...!", logContext);
@@ -483,7 +502,7 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public int expireStalePendingOrders() {
         LogContext logContext = getLogContext("expireStalePendingOrders", Collections.emptyList());
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(pendingOrderExpiryMinutes);
@@ -502,7 +521,7 @@ public class OrderServiceImp implements OrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public int expireStaleConfirmedUnpaidOrders() {
         LogContext logContext = getLogContext("expireStaleConfirmedUnpaidOrders", Collections.emptyList());
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(confirmedUnpaidExpiryMinutes);
@@ -549,16 +568,7 @@ public class OrderServiceImp implements OrderService {
         return cancelled;
     }
 
-    // private method
-
-    private OrderModel toOrderModel(OrderEntity orderEntity) {
-        OrderModel orderModel = toOrderModelWithoutItemCount(orderEntity);
-        int itemCount = Math.toIntExact(orderItemRepository.countByOrder_Id(orderEntity.getId()));
-        orderModel.setTotalOrderItem(itemCount);
-        orderModel.setCanAcceptPayment(resolveCanAcceptPayment(orderEntity, itemCount));
-        orderModel.setAllowedOrderStatuses(resolveAllowedOrderStatuses(orderEntity));
-        return orderModel;
-    }
+    // ======================================== Helper Methods ========================================
 
     private OrderModel toOrderModelWithoutItemCount(OrderEntity orderEntity) {
         OrderModel orderModel = modelMapper.map(orderEntity, OrderModel.class);
@@ -572,85 +582,12 @@ public class OrderServiceImp implements OrderService {
         return orderModel;
     }
 
-    private void applyTotalOrderItemCounts(List<OrderEntity> orders, List<OrderModel> models) {
-        if (orders == null || orders.isEmpty()) {
-            return;
-        }
-        List<Integer> orderIds = orders.stream()
-            .map(OrderEntity::getId)
-            .collect(Collectors.toList());
-        Map<Integer, Long> countsByOrderId = orderItemRepository.countByOrderIds(orderIds).stream()
-            .collect(Collectors.toMap(
-                row -> (Integer) row[0],
-                row -> (Long) row[1]
-            ));
-        for (int i = 0; i < orders.size(); i++) {
-            Integer orderId = orders.get(i).getId();
-            long count = countsByOrderId.getOrDefault(orderId, 0L);
-            models.get(i).setTotalOrderItem(Math.toIntExact(count));
-        }
-    }
-
-    private void applyCanAcceptPayment(List<OrderEntity> orders, List<OrderModel> models) {
-        if (orders == null || orders.isEmpty()) {
-            return;
-        }
-        List<Integer> orderIds = orders.stream().map(OrderEntity::getId).collect(Collectors.toList());
-        Map<Integer, BigDecimal> allocatedByOrderId = paymentRepository
-            .sumAllocatedAmountsByOrderIds(orderIds, Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED))
-            .stream()
-            .collect(Collectors.toMap(
-                row -> (Integer) row[0],
-                row -> (BigDecimal) row[1]
-            ));
-        for (int i = 0; i < orders.size(); i++) {
-            OrderEntity order = orders.get(i);
-            OrderModel model = models.get(i);
-            BigDecimal allocated = allocatedByOrderId.getOrDefault(order.getId(), BigDecimal.ZERO);
-            model.setCanAcceptPayment(
-                paymentService.canAcceptNewPayment(order, model.getTotalOrderItem(), allocated)
-            );
-        }
-    }
-
-    private Boolean resolveCanAcceptPayment(OrderEntity order, int orderItemCount) {
-        BigDecimal allocated = Objects.requireNonNullElse(
-            paymentRepository.sumAmountByOrderIdAndPaymentStatuses(
-                order.getId(), Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED)
-            ),
-            BigDecimal.ZERO
-        );
-        return paymentService.canAcceptNewPayment(order, orderItemCount, allocated);
-    }
-
-    private void applyAllowedOrderStatuses(List<OrderEntity> orders, List<OrderModel> models) {
-        if (orders == null || orders.isEmpty()) {
-            return;
-        }
-        List<Integer> orderIds = orders.stream().map(OrderEntity::getId).collect(Collectors.toList());
-        Set<Integer> paidOrderIds = new HashSet<>(
-            paymentRepository.findDistinctOrderIdsByOrderIdInAndPaymentStatus(
-                orderIds, PaymentStatus.COMPLETED
-            )
-        );
-        for (int i = 0; i < orders.size(); i++) {
-            OrderEntity order = orders.get(i);
-            boolean paid = paidOrderIds.contains(order.getId());
-            models.get(i).setAllowedOrderStatuses(
-                OrderStatusTransitionUtils.allowedTargetStatuses(order.getOrderStatus(), paid)
-            );
-        }
-    }
-
-    private List<OrderStatus> resolveAllowedOrderStatuses(OrderEntity order) {
-        return OrderStatusTransitionUtils.allowedTargetStatuses(
-            order.getOrderStatus(),
-            hasCompletedPayment(order.getId())
-        );
-    }
-
-    private boolean hasCompletedPayment(Integer orderId) {
-        return paymentRepository.existsByOrderIdAndPaymentStatus(orderId, PaymentStatus.COMPLETED);
+    private OrderModel toOrderModel(OrderEntity orderEntity) {
+        OrderModel orderModel = toOrderModelWithoutItemCount(orderEntity);
+        orderModel.setTotalOrderItem(orderItemRepository.countByOrder_Id(orderEntity.getId()));
+        orderModel.setCanAcceptPayment(resolveCanAcceptPayment(orderEntity, orderModel.getTotalOrderItem()));
+        orderModel.setAllowedOrderStatuses(resolveAllowedOrderStatuses(orderEntity));
+        return orderModel;
     }
 
     private OrderEntity getOrder(Integer orderId, LogContext logContext) {
@@ -665,13 +602,111 @@ public class OrderServiceImp implements OrderService {
         });
     }
 
+    private List<Integer> getOrderIds(List<OrderEntity> orders) {
+        return orders.stream().map(OrderEntity::getId).collect(Collectors.toList());
+    }
+
+    // setTotalOrderItem cho tất cả các orderModel trong list
+    private void applyTotalOrderItemCounts(List<OrderEntity> orders, List<OrderModel> models) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        // lấy tất cả các order id từ các order trong list
+        List<Integer> orderIds = getOrderIds(orders);
+
+        Map<Integer, Integer> countsByOrderId = orderItemRepository.countByOrderIds(orderIds).stream()
+            .collect(Collectors.toMap(
+                key -> (Integer) key[0], // key là order id
+                value -> (Integer) value[1] // value là số lượng item của order đó
+            ));
+
+        for (int i = 0; i < orders.size(); i++) {
+            Integer orderId = orders.get(i).getId();
+            // lấy số lượng item của order, nếu không có thì trả về 0
+            Integer count = countsByOrderId.getOrDefault(orderId, 0);
+            models.get(i).setTotalOrderItem(count);
+        }
+    }
+
+    // setCanAcceptPayment cho tất cả các orderModel trong list
+    private void applyCanAcceptPayment(List<OrderEntity> orders, List<OrderModel> models) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        List<Integer> orderIds = getOrderIds(orders);
+
+        Map<Integer, BigDecimal> allocatedByOrderId = paymentRepository
+            // lấy tất cả các order id và số tiền đã allocated của order đó trong status PENDING và COMPLETED
+            .sumAllocatedAmountsByOrderIds(orderIds, Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED))
+            .stream()
+            .collect(Collectors.toMap(
+                key -> (Integer) key[0],
+                value -> (BigDecimal) value[1]
+            ));
+            
+        for (int i = 0; i < orders.size(); i++) {
+            OrderEntity order = orders.get(i);
+            OrderModel model = models.get(i);
+            BigDecimal allocated = allocatedByOrderId.getOrDefault(order.getId(), BigDecimal.ZERO);
+            model.setCanAcceptPayment(
+                paymentService.canAcceptNewPayment(order, model.getTotalOrderItem(), allocated)
+            );
+        }
+    }
+
+    // setAllowedOrderStatuses cho tất cả các orderModel trong list
+    private void applyAllowedOrderStatuses(List<OrderEntity> orders, List<OrderModel> models) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        List<Integer> orderIds = getOrderIds(orders);
+
+        // lấy tất cả các order id có payment status COMPLETED ( order đã thanh toán )
+        Set<Integer> paidOrderIds = new HashSet<>(
+            paymentRepository.findDistinctOrderIdsByOrderIdInAndPaymentStatus(
+                orderIds, PaymentStatus.COMPLETED
+            )
+        );
+
+        for (int i = 0; i < orders.size(); i++) {
+            OrderEntity order = orders.get(i);
+            boolean paid = paidOrderIds.contains(order.getId());
+            models.get(i).setAllowedOrderStatuses(
+                OrderStatusTransitionUtils.allowedTargetStatuses(order.getOrderStatus(), paid)
+            );
+        }
+    }
+
+    // kiểm tra xem đơn có thể nhận thanh toán không
+    private Boolean resolveCanAcceptPayment(OrderEntity order, int orderItemCount) {
+        BigDecimal allocated = Objects.requireNonNullElse(
+            // lấy số tiền đã allocated của order đó trong status PENDING và COMPLETED
+            paymentRepository.sumAmountByOrderIdAndPaymentStatuses(
+                order.getId(), Arrays.asList(PaymentStatus.PENDING, PaymentStatus.COMPLETED)
+            ),
+            BigDecimal.ZERO
+        );
+        return paymentService.canAcceptNewPayment(order, orderItemCount, allocated);
+    }
+
+    // lấy tất cả các trạng thái được phép chuyển sang từ trạng thái hiện tại
+    private List<OrderStatus> resolveAllowedOrderStatuses(OrderEntity order) {
+        return OrderStatusTransitionUtils.allowedTargetStatuses(
+            order.getOrderStatus(),
+            hasCompletedPayment(order.getId())
+        );
+    }
+
+    // kiểm tra xem đơn đã thanh toán chưa
+    private boolean hasCompletedPayment(Integer orderId) {
+        return paymentRepository.existsByOrderIdAndPaymentStatus(orderId, PaymentStatus.COMPLETED);
+    }
+
     private void assignTableForOrder(
-        OrderEntity order,
-        OrderType orderType,
-        Integer tableNumber,
-        UserEntity customerActor,
-        LogContext logContext
+        OrderEntity order, OrderType orderType, Integer tableNumber,
+        UserEntity customerActor, LogContext logContext
     ) {
+        // nếu đơn là đơn giao hàng thì không cần assign bàn
         if (orderType == OrderType.DELIVERY) {
             order.setTable(null);
             return;
@@ -685,18 +720,22 @@ public class OrderServiceImp implements OrderService {
             log.logError(e.getMessage(), e, logContext);
             throw e;
         }
+        // kiểm tra xem có đơn nào đang sử dụng bàn này không
         TableHoldGuard.assertNoHoldingOrderOnTable(
             orderRepository, tableNumber, order.getId(), "OrderModel", logContext, log
         );
+        // lấy bàn từ database
         TableEntity table = TableLookupUtils.requireTable(
             tableRepository, tableNumber, "OrderModel", logContext, log
         );
+        // nếu user hiện tại là customer thì kiểm tra xem bàn có sẵn không
         if (customerActor != null && customerActor.getRole() == UserRole.CUSTOMER) {
             assertTableAvailableForNewOrder(table, logContext);
         }
         order.setTable(table);
     }
 
+    // kiểm tra xem bàn có sẵn không
     private void assertTableAvailableForNewOrder(TableEntity table, LogContext logContext) {
         if (table.getTableStatus() == TableStatus.AVAILABLE) {
             return;
@@ -711,17 +750,26 @@ public class OrderServiceImp implements OrderService {
         throw e;
     }
 
+    // hủy đơn và sync trạng thái order item và bàn
     private void cancelOrderAndSyncTable(OrderEntity foundOrder, LogContext logContext) {
         OrderStatus previousStatus = foundOrder.getOrderStatus();
+
+        // thay đổi trạng thái đơn sang trạng thái CANCELLED
         OrderStatusTransitionUtils.applyOrderStatusTransition(
             foundOrder, OrderStatus.CANCELLED, hasCompletedPayment(foundOrder.getId())
         );
+
+        // sync trạng thái các item của đơn sang trạng thái CANCELLED
         orderItemStatusSyncService.syncItemsWithOrderStatus(
             foundOrder.getId(), OrderStatus.CANCELLED, previousStatus
         );
+
         orderRepository.save(foundOrder);
+
+        // hủy tất cả các payment pending của đơn
         paymentService.cancelPendingPaymentsForOrder(foundOrder.getId());
 
+        // sync trạng thái bàn
         if (foundOrder.getTable() != null) {
             tableStatusSyncService.syncTableStatus(foundOrder.getTable().getTableNumber());
         }
@@ -729,13 +777,7 @@ public class OrderServiceImp implements OrderService {
         clearOrderAndTableCaches(logContext);
     }
 
-    private static String normalizeNotes(String notes) {
-        if (notes == null || notes.isBlank()) {
-            return null;
-        }
-        return notes.trim();
-    }
-
+    // kiểm tra xem user hiện tại có phải là owner của đơn không
     private void orderOwnerCheck(OrderEntity order, UserEntity currentUser, LogContext logContext) {
         if (currentUser.getRole() == UserRole.CUSTOMER &&
             !Objects.equals(order.getCustomerEmail(), currentUser.getEmail())) {
@@ -749,6 +791,7 @@ public class OrderServiceImp implements OrderService {
         }
     }
 
+    // generate unique order number
     private String generateUniqueOrderNumber() {
         String orderNumber;
         do {
@@ -808,4 +851,112 @@ public class OrderServiceImp implements OrderService {
         return conditions;
     }
 
+    // ======================================== Fallback Methods ========================================
+    
+    @SuppressWarnings("unused")
+    private Page<OrderModel> filtersForCustomerFallback(
+        Integer id, String orderNumber, Integer tableNumber,
+        OrderStatus orderStatus, OrderType orderType, BigDecimal subTotal,
+        BigDecimal tax, BigDecimal totalAmount,
+        Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<OrderEntity>> conditions = buildFilterConditions(
+            id, orderNumber, tableNumber, null, null, null, null,
+            orderStatus, orderType, subTotal, tax, totalAmount
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            ORDER_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<OrderModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, OrderModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersForCustomer", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filtersForCustomer", e);
+    }
+
+    @SuppressWarnings("unused")
+    private Page<OrderModel> filtersForAdminFallback(
+        Integer id, String orderNumber, Integer tableNumber,
+        Integer waiterId, String customerName, String customerPhone, String customerEmail,
+        OrderStatus orderStatus, OrderType orderType, BigDecimal subTotal,
+        BigDecimal tax, BigDecimal totalAmount,
+        Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<OrderEntity>> conditions = buildFilterConditions(
+            id, orderNumber, tableNumber, waiterId, customerName, customerPhone, customerEmail,
+            orderStatus, orderType, subTotal, tax, totalAmount
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            ORDER_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<OrderModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, OrderModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersForAdmin", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filtersForAdmin", e);
+    }
+
+    @SuppressWarnings("unused")
+    private OrderModel createFallback(OrderCustomerRequestModel order, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private OrderModel updateForCustomerFallback(OrderCustomerRequestModel update, Integer orderId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateForCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<OrderModel> updateByAdminFallback(List<OrderAdminRequestModel> updates, List<Integer> orderIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateByAdmin");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private OrderModel submitFallback(Integer orderId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "submit");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private OrderModel cancelFallback(Integer orderId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "cancel");
+        return null;
+    }
 }

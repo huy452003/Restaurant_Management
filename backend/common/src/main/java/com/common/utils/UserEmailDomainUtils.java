@@ -5,14 +5,17 @@ import java.util.Set;
 
 public final class UserEmailDomainUtils {
 
+    private UserEmailDomainUtils() {
+    }
+
+    // list đuôi mail được phép
     private static final Set<String> ALLOWED_DOMAINS = Set.of(
         "gmail.com",
         "outlook.com",
         "outlook.com.vn"
     );
 
-    private UserEmailDomainUtils() {}
-
+    // kiểm tra xem đuôi mail có phải là đuôi mail được phép không
     public static boolean isAllowedDomain(String email) {
         if (email == null || email.isBlank()) {
             return true;

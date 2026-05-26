@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -79,7 +80,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public VnpayCheckoutResponse initiateVnpay(VnpayInitRequestModel request, HttpServletRequest httpRequest) {
         // Luồng: tra đơn theo orderNumber → amount còn lại → cashier = user đăng nhập → create VNPAY → ký URL.
         LogContext logContext = getLogContext("initiateVnpay", Collections.emptyList());
@@ -152,7 +153,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public ResponseEntity<String> handleIpn(HttpServletRequest request) {
         // Luồng: verify hash → tra payment theo vnp_TxnRef → khớp vnp_Amount → theo ResponseCode gọi complete hoặc failed.
         LogContext logContext = getLogContext("handleIpn", Collections.emptyList());
@@ -232,7 +233,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public void handleReturn(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // Luồng: verify hash → đồng bộ trạng thái (dự phòng IPN) → redirect frontend hoặc hiển thị HTML kết quả.
         LogContext logContext = getLogContext("handleReturn", Collections.emptyList());
@@ -305,6 +306,8 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         VnpayReturnHtmlUtils.write(response, ok, payment, params, homeUrl);
     }
 
+    // ======================================== Helper Methods ========================================
+
     private OrderEntity resolveOrderForPayment(PaymentEntity payment) {
         if (payment == null) {
             return null;
@@ -319,6 +322,42 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return orderRepository.findById(payment.getOrderId()).orElse(null);
     }
 
+    private PaymentModel toPaymentModel(PaymentEntity entity) {
+        PaymentModel paymentModel = modelMapper.map(entity, PaymentModel.class);
+        if (entity.getOrder() != null) {
+            paymentModel.setOrderNumber(entity.getOrder().getOrderNumber());
+        }
+        if (entity.getCashier() != null) {
+            paymentModel.setCashierFullname(entity.getCashier().getFullname());
+        }
+        return paymentModel;
+    }
+
+    private OrderEntity resolveOrderFromOrderNumber(String orderNumber, LogContext logContext) {
+        return orderRepository.findByOrderNumber(orderNumber).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Order not found with orderNumber: " + orderNumber,
+                Collections.singletonList(orderNumber),
+                "OrderModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            return e;
+        });
+    }
+
+    private PaymentEntity resolvePayment(Integer paymentId, LogContext logContext) {
+        return paymentRepository.findById(paymentId).orElseThrow(() -> {
+            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
+                "Payment not found with id: " + paymentId,
+                Collections.singletonList(paymentId),
+                "PaymentModel"
+            );
+            log.logError(e.getMessage(), e, logContext);
+            return e;
+        });
+    }
+
+    // kiểm tra xem payment có phải là payment của đơn delivery không
     private boolean isCustomerDeliveryPayment(PaymentEntity payment) {
         OrderEntity order = resolveOrderForPayment(payment);
         return order != null && order.getOrderType() == OrderType.DELIVERY;
@@ -333,6 +372,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return origin + "/staff/orders";
     }
 
+    // lấy origin của frontend
     private String resolveFrontendOrigin() {
         String base = vnpayProperties.getFrontendRedirectBase();
         if (StringUtils.hasText(base)) {
@@ -372,43 +412,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return target + "?" + q;
     }
 
-    // private method
-
-    private PaymentModel toPaymentModel(PaymentEntity entity) {
-        PaymentModel paymentModel = modelMapper.map(entity, PaymentModel.class);
-        if (entity.getOrder() != null) {
-            paymentModel.setOrderNumber(entity.getOrder().getOrderNumber());
-        }
-        if (entity.getCashier() != null) {
-            paymentModel.setCashierFullname(entity.getCashier().getFullname());
-        }
-        return paymentModel;
-    }
-
-    private OrderEntity resolveOrderFromOrderNumber(String orderNumber, LogContext logContext) {
-        return orderRepository.findByOrderNumber(orderNumber).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Order not found with orderNumber: " + orderNumber,
-                Collections.singletonList(orderNumber),
-                "OrderModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
-    }
-
-    private PaymentEntity resolvePayment(Integer paymentId, LogContext logContext) {
-        return paymentRepository.findById(paymentId).orElseThrow(() -> {
-            NotFoundExceptionHandle e = new NotFoundExceptionHandle(
-                "Payment not found with id: " + paymentId,
-                Collections.singletonList(paymentId),
-                "PaymentModel"
-            );
-            log.logError(e.getMessage(), e, logContext);
-            return e;
-        });
-    }
-
+    // tạo label cho order info
     private static String buildOrderInfoLabel(PaymentEntity entity) {
         // VNPAY: tiếng Việt không dấu, không ký tự đặc biệt (Alphanumeric + khoảng trắng).
         Integer orderId = entity.getOrderId() != null ? entity.getOrderId() : (entity.getOrder() != null ? entity.getOrder().getId() : null);
@@ -418,6 +422,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return sanitizeVnpOrderInfo(raw);
     }
 
+    // sanitize order info
     private static String sanitizeVnpOrderInfo(String raw) {
         if (raw == null) {
             return "Thanh toan";
@@ -428,20 +433,22 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return cleaned.isEmpty() ? "Thanh toan" : cleaned;
     }
 
+    // cắt chuỗi an toàn cho order info
     private static String truncate(String s, int max) {
-        // Cắt chuỗi an toàn cho vnp_OrderInfo.
         if (s == null) {
             return "";
         }
         return s.length() <= max ? s : s.substring(0, max);
     }
 
+    // quy đổi VNĐ → số nguyên theo spec (×100) để gửi vnp_Amount.
     private static String toVnpAmountVnd(BigDecimal amount) {
         // Quy đổi VNĐ → số nguyên theo spec (×100) để gửi vnp_Amount.
         long v = amount.setScale(2, RoundingMode.HALF_UP).movePointRight(2).longValueExact();
         return String.valueOf(v);
     }
 
+    // kiểm tra xem VNPAY có được cấu hình không
     private void requireVnpayConfigured(LogContext logContext) {
         // Fail nhanh nếu thiếu cấu hình cốt lõi trước khi build URL.
         if (
@@ -472,6 +479,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         }
     }
 
+    // lấy IP client
     private static String resolveClientIp(HttpServletRequest request) {
         // vnp_IpAddr: ưu tiên X-Forwarded-For khi app sau reverse proxy.
         String xff = request.getHeader("X-Forwarded-For");
@@ -489,6 +497,7 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
         return "113.160.227.3";
     }
 
+    // kiểm tra xem IP có phải là IP của VNPAY không
     private static boolean isUsableVnpIp(String ip) {
         if (!StringUtils.hasText(ip)) {
             return false;
@@ -499,14 +508,14 @@ public class VnpayPaymentServiceImpl implements VnpayPaymentService {
             && !"localhost".equalsIgnoreCase(normalized);
     }
 
+    // phản hồi IPN chuẩn JSON (RspCode/Message) để VNPAY dừng retry khi hợp lệ.
     private static ResponseEntity<String> bodyJson(String rspCode, String message) {
-        // Phản hồi IPN chuẩn JSON (RspCode/Message) để VNPAY dừng retry khi hợp lệ.
         String json = String.format("{\"RspCode\":\"%s\",\"Message\":\"%s\"}", rspCode, escapeJson(message));
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(json);
     }
 
+    // Escape tối thiểu để JSON IPN không vỡ chuỗi Message.
     private static String escapeJson(String s) {
-        // Escape tối thiểu để JSON IPN không vỡ chuỗi Message.
         if (s == null) {
             return "";
         }

@@ -58,16 +58,15 @@ import com.common.specifications.SpecificationHelper;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 import com.handle_exceptions.NotFoundExceptionHandle;
-import com.handle_exceptions.ServiceUnavailableExceptionHandle;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
 import com.handle_exceptions.UnauthorizedExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.security.configurations.JwtConfig;
 import com.security.services.BlackListService;
 import com.security.services.JwtService;
 
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 @Service
@@ -116,7 +115,7 @@ public class UserServiceImp implements UserService {
 
     // filter users with pagination
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "filtersFallback")
+    @CircuitBreaker(name = "user-service-read", fallbackMethod = "filtersFallback")
     public Page<UserModel> filters(
         Integer id, String username, String fullname,
         String email, String phone, Gender gender,
@@ -180,7 +179,7 @@ public class UserServiceImp implements UserService {
 
     // login
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "loginFallback")
+    @CircuitBreaker(name = "user-service-login-logout", fallbackMethod = "loginFallback")
     public UserLoginModel login(LoginRequestModel req) {
         LogContext logContext = getLogContext("login", Collections.emptyList());
         log.logInfo("Logging in user ...!", logContext);
@@ -247,7 +246,7 @@ public class UserServiceImp implements UserService {
 
     // logout
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "logoutFallback")
+    @CircuitBreaker(name = "user-service-login-logout", fallbackMethod = "logoutFallback")
     public void logout() {
         LogContext logContext = getLogContext("logout", Collections.emptyList());
         log.logInfo("User is logging out ...!", logContext);
@@ -263,7 +262,7 @@ public class UserServiceImp implements UserService {
 
     // create users — lưu tạm Redis; chỉ ghi DB khi verify
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "createsFallback")
+    @CircuitBreaker(name = "user-service-write", fallbackMethod = "createsFallback")
     public List<UserRegisterModel> creates(List<RegisterRequestModel> registers) {
         LogContext logContext = getLogContext("creates", Collections.emptyList());
         log.logInfo("Staging " + registers.size() + " registration(s) in Redis ...!", logContext);
@@ -353,24 +352,9 @@ public class UserServiceImp implements UserService {
         return results;
     }
 
-    private void addRegistrationConflict(
-        List<Object> conflicts, String field, String value,
-        boolean existsInDb, boolean existsInRedis, String dbMessage,
-        String pendingMessage
-    ) {
-        if (!existsInDb && !existsInRedis) {
-            return;
-        }
-        Map<String, Object> conflict = new HashMap<>();
-        conflict.put("field", field);
-        conflict.put("value", value);
-        conflict.put("message", existsInDb ? dbMessage : pendingMessage);
-        conflicts.add(conflict);
-    }
-
     // update user normal - user tự update thông tin của chính mình
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updateNormalFallback")
+    @CircuitBreaker(name = "user-service-write", fallbackMethod = "updateNormalFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel updateNormal(UpdateUserNormalModel update, Integer userId) {
@@ -450,7 +434,7 @@ public class UserServiceImp implements UserService {
 
     // update user for admin
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatesForAdminFallback")
+    @CircuitBreaker(name = "user-service-admin-write", fallbackMethod = "updatesForAdminFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds) {
@@ -598,7 +582,7 @@ public class UserServiceImp implements UserService {
 
     // update password by customer
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "updatePasswordByCustomerFallback")
+    @CircuitBreaker(name = "user-service-write", fallbackMethod = "updatePasswordByCustomerFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel updatePasswordByCustomer(UserUpdatePasswordRequestModel update, Integer userId) {
@@ -651,7 +635,7 @@ public class UserServiceImp implements UserService {
 
     // verify and activate user
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "verifyAndActivateFallback")
+    @CircuitBreaker(name = "user-service-verify", fallbackMethod = "verifyAndActivateFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel verifyAndActivate(String verificationToken) {
@@ -725,7 +709,7 @@ public class UserServiceImp implements UserService {
 
     // resend verification token
     @Override
-    @CircuitBreaker(name = "restaurant-management-service", fallbackMethod = "resendVerificationTokenFallback")
+    @CircuitBreaker(name = "user-service-verify", fallbackMethod = "resendVerificationTokenFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public String resendVerificationToken(String email) {
@@ -761,242 +745,7 @@ public class UserServiceImp implements UserService {
         return verificationToken;
     }
 
-    //Fallback method *************************************************************//
-
-    // filtersFallback
-    @SuppressWarnings("unused")
-    private Page<UserModel> filtersFallback(
-        Integer id, String username, String fullname,
-        String email, String phone, Gender gender,
-        LocalDate birth, String address, UserRole role, UserStatus userStatus,
-        Pageable pageable, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        List<FilterCondition<UserEntity>> conditions = buildFilterConditions(
-            id, username, fullname, email, phone, gender, birth, address, role, userStatus
-        );
-
-        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
-            USER_REDIS_KEY_PREFIX, conditions, pageable);
-            
-        Page<UserModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
-            redisTemplate, redisKeyFilters, pageable, objectMapper, UserModel.class);
-
-        if (cachedPage != null && !cachedPage.isEmpty()) {
-            return cachedPage;
-        }
-
-        // Service unavailable và không có cache
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for filters service", 
-            "filters"
-        );
-        throw error;
-    }
-
-    // loginFallback
-    @SuppressWarnings("unused")
-    private UserLoginModel loginFallback(
-        LoginRequestModel req, Throwable e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessThrowable(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for login service", 
-            "login"
-        );
-        throw error;
-    }
-
-    // logoutFallback
-    @SuppressWarnings("unused")
-    private void logoutFallback(Exception e) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for logout service", 
-            "logout"
-        );
-        throw error;
-    }
-
-    // createsFallback
-    @SuppressWarnings("unused")
-    private List<UserRegisterModel> createsFallback(
-        List<RegisterRequestModel> registers, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for creates service", 
-            "creates"
-        );
-        throw error;
-    }
-
-    // updateNormalFallback
-    @SuppressWarnings("unused")
-    private UserModel updateNormalFallback(
-        UpdateUserNormalModel update, Integer userId, Exception e
-    ) {
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updateNormal service", 
-            "updateNormal"
-        );
-        throw error;
-    }
-
-    // updatesForAdminFallback
-    @SuppressWarnings("unused")
-    private List<UserModel> updatesForAdminFallback(
-        List<UpdateUserForAdminModel> updates, List<Integer> userIds, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatesForAdmin service", 
-            "updatesForAdmin"
-        );
-        throw error;
-    }
-
-    // updatePasswordByCustomerFallback
-    @SuppressWarnings("unused")
-    private UserModel updatePasswordByCustomerFallback(
-        UserUpdatePasswordRequestModel update, Integer userId, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for updatePasswordByCustomer service", 
-            "updatePasswordByCustomer"
-        );
-        throw error;
-    }
-
-    // verifyAndActivateFallback
-    @SuppressWarnings("unused")
-    private UserModel verifyAndActivateFallback(
-        String verificationToken, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for verifyAndActivate service", 
-            "verifyAndActivate"
-        );
-        throw error;
-    }
-
-    // resendVerificationTokenFallback
-    @SuppressWarnings("unused")
-    private String resendVerificationTokenFallback(
-        String email, Exception e
-    ) {
-        // Re-throw business exceptions để exception handler xử lý đúng
-        if (isBusinessException(e)) {
-            throw (RuntimeException) e;
-        }
-        if (!isCircuitBreakerOpen(e)) {
-            throw new RuntimeException(e);
-        }
-        
-        // Chỉ trả 503 khi circuit breaker thực sự open
-        ServiceUnavailableExceptionHandle error = new ServiceUnavailableExceptionHandle(
-            e != null && e.getMessage() != null ? e.getMessage() : "Circuit breaker for resendVerificationToken service", 
-            "resendVerificationToken"
-        );
-        throw error;
-    }
-
-    //Fallback method *************************************************************//
-
-    // Helper method để check business exception
-    private boolean isBusinessException(Exception e) {
-        return e instanceof ConflictExceptionHandle || 
-               e instanceof NotFoundExceptionHandle ||
-               e instanceof ValidationExceptionHandle ||
-               e instanceof ForbiddenExceptionHandle ||
-               e instanceof UnauthorizedExceptionHandle;
-    }
-
-    private boolean isBusinessThrowable(Throwable e) {
-        return e instanceof ConflictExceptionHandle ||
-               e instanceof NotFoundExceptionHandle ||
-               e instanceof ValidationExceptionHandle ||
-               e instanceof ForbiddenExceptionHandle ||
-               e instanceof UnauthorizedExceptionHandle;
-    }
-
-    private boolean isCircuitBreakerOpen(Throwable e) {
-        Throwable cause = e;
-        while (cause != null) {
-            if (cause instanceof CallNotPermittedException) {
-                return true;
-            }
-            cause = cause.getCause();
-        }
-        return false;
-    }
-
-    // private method
+    // ======================================== Helper Methods ========================================
 
     private UserModel toUserModel(UserEntity userEntity) {
         UserModel userModel = modelMapper.map(userEntity, UserModel.class);
@@ -1004,6 +753,22 @@ public class UserServiceImp implements UserService {
             userModel.setAge(AgeUtils.calculateAge(userEntity.getBirth()));
         }
         return userModel;
+    }
+
+    // thêm conflict vào list conflicts
+    private void addRegistrationConflict(
+        List<Object> conflicts, String field, String value,
+        boolean existsInDb, boolean existsInRedis, String dbMessage,
+        String pendingMessage
+    ) {
+        if (!existsInDb && !existsInRedis) {
+            return;
+        }
+        Map<String, Object> conflict = new HashMap<>();
+        conflict.put("field", field);
+        conflict.put("value", value);
+        conflict.put("message", existsInDb ? dbMessage : pendingMessage);
+        conflicts.add(conflict);
     }
 
     private List<FilterCondition<UserEntity>> buildFilterConditions(
@@ -1037,7 +802,6 @@ public class UserServiceImp implements UserService {
         }
         if (role != null && (role.equals(UserRole.ADMIN) ||
             role.equals(UserRole.CUSTOMER) || role.equals(UserRole.MANAGER) ||
-            role.equals(UserRole.CHEF) ||
             role.equals(UserRole.CASHIER))) {
             conditions.add(FilterCondition.eq("role", role));
         }
@@ -1047,4 +811,97 @@ public class UserServiceImp implements UserService {
         return conditions;
     }
 
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<UserModel> filtersFallback(
+        Integer id, String username, String fullname,
+        String email, String phone, Gender gender,
+        LocalDate birth, String address, UserRole role, UserStatus userStatus,
+        Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<UserEntity>> conditions = buildFilterConditions(
+            id, username, fullname, email, phone, gender, birth, address, role, userStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            USER_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<UserModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, UserModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filters", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private UserLoginModel loginFallback(LoginRequestModel req, Throwable e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "login");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private void logoutFallback(Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "logout");
+    }
+
+    @SuppressWarnings("unused")
+    private List<UserRegisterModel> createsFallback(
+        List<RegisterRequestModel> registers, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "creates");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private UserModel updateNormalFallback(
+        UpdateUserNormalModel update, Integer userId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateNormal");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<UserModel> updatesForAdminFallback(
+        List<UpdateUserForAdminModel> updates, List<Integer> userIds, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updatesForAdmin");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private UserModel updatePasswordByCustomerFallback(
+        UserUpdatePasswordRequestModel update, Integer userId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updatePasswordByCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private UserModel verifyAndActivateFallback(String verificationToken, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "verifyAndActivate");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private String resendVerificationTokenFallback(String email, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "resendVerificationToken");
+        return null;
+    }
 }

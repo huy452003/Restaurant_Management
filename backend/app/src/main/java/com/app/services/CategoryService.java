@@ -12,6 +12,6 @@ public interface CategoryService {
     Page<CategoryModel> filters(
         Integer id, String name, CategoryStatus categoryStatus, Pageable pageable
     );
-    List<CategoryModel> create(List<CategoryModel> categories);
-    List<CategoryModel> update(List<CategoryModel> updates, List<Integer> categoryIds);
+    List<CategoryModel> creates(List<CategoryModel> categories);
+    List<CategoryModel> updates(List<CategoryModel> updates, List<Integer> categoryIds);
 }

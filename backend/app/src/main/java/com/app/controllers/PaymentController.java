@@ -29,7 +29,11 @@ import com.common.models.PaginatedResponse;
 import com.common.models.Response;
 import com.common.models.payment.PaymentCreateRequestModel;
 import com.common.models.payment.PaymentModel;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -59,7 +63,8 @@ public class PaymentController {
     }
 
     @GetMapping("/filters")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CASHIER')")
+    @RateLimiter(name = "payment-controller-staff-read", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<PaymentModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -91,7 +96,8 @@ public class PaymentController {
     }
     
     @PostMapping("")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CASHIER','CUSTOMER')")
+    @RateLimiter(name = "payment-controller-init", fallbackMethod = "createFallback")
     public ResponseEntity<Response<PaymentModel>> create(
         Locale locale,
         @RequestBody @Valid PaymentCreateRequestModel payment
@@ -112,7 +118,8 @@ public class PaymentController {
     }
 
     @PatchMapping("/complete/{paymentId}")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CASHIER')")
+    @RateLimiter(name = "payment-controller-staff-write", fallbackMethod = "completeFallback")
     public ResponseEntity<Response<PaymentModel>> complete(
         Locale locale,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer paymentId
@@ -133,7 +140,8 @@ public class PaymentController {
     }
 
     @PatchMapping("/cancel/{paymentId}")
-    @PreAuthorize("hasAnyRole('CASHIER','MANAGER','ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CASHIER')")
+    @RateLimiter(name = "payment-controller-staff-write", fallbackMethod = "cancelFallback")
     public ResponseEntity<Response<PaymentModel>> cancel(
         Locale locale,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer paymentId
@@ -151,5 +159,42 @@ public class PaymentController {
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
+    }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<PaymentModel>>> filtersFallback(
+        Locale locale, Integer id, String orderNumber, 
+        String cashierFullname, PaymentMethod paymentMethod, 
+        BigDecimal amount, PaymentStatus paymentStatus, 
+        String transactionId, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filters");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaymentModel>> createFallback(
+        Locale locale, PaymentCreateRequestModel payment, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaymentModel>> completeFallback(
+        Locale locale, Integer paymentId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "complete");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaymentModel>> cancelFallback(
+        Locale locale, Integer paymentId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "cancel");
+        return null;
     }
 }

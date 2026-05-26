@@ -1,13 +1,15 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.app.services.TableStatusSyncService;
 import com.app.services.TableService;
 import com.app.utils.OrderTableHoldUtils;
-import com.common.enums.OrderStatus;
 import com.common.repositories.OrderRepository;
 import com.common.repositories.TableRepository;
 import com.common.specifications.FilterCondition;
@@ -23,13 +25,18 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.ConflictExceptionHandle;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.util.HashSet;
 import java.util.List;
@@ -73,11 +80,11 @@ public class TableServiceImp implements TableService {
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
     @Override
+    @CircuitBreaker(name = "table-service-read", fallbackMethod = "filtersFallback")
     public Page<TableModel> filters(
         Integer id, Integer tableNumber, Integer capacity,
         TableStatus tableStatus, String location, boolean excludeTablesWithPendingOrder,
-        boolean freshSnapshot,
-        Pageable pageable
+        boolean freshSnapshot, Pageable pageable
     ) {
         LogContext logContext = getLogContext("filters", Collections.emptyList());
         log.logInfo("Filtering tables with pagination ...!", logContext);
@@ -134,6 +141,8 @@ public class TableServiceImp implements TableService {
     }
 
     @Override
+    @CircuitBreaker(name = "table-service-write", fallbackMethod = "createFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public List<TableModel> create(List<TableRequestModel> tables) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating tables ...!", logContext);
@@ -180,10 +189,11 @@ public class TableServiceImp implements TableService {
     }
     
     @Override
+    @CircuitBreaker(name = "table-service-write", fallbackMethod = "updateFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<TableModel> update(List<TableRequestModel> updates, List<Integer> tableIds) {
-        LogContext logContext = getLogContext(
-            "update", tableIds != null ? tableIds : Collections.emptyList()
-        );
+        LogContext logContext = getLogContext("update", tableIds);
         log.logInfo("Updating tables ...!", logContext);
 
         if(updates.size() != tableIds.size()){
@@ -267,6 +277,9 @@ public class TableServiceImp implements TableService {
     }
 
     @Override
+    @CircuitBreaker(name = "table-service-write", fallbackMethod = "markAvailableFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public TableModel markAvailable(Integer tableId) {
         LogContext logContext = getLogContext("markAvailable", Collections.singletonList(tableId));
         log.logInfo("Marking table as AVAILABLE ...!", logContext);
@@ -290,19 +303,23 @@ public class TableServiceImp implements TableService {
         return modelMapper.map(refreshed, TableModel.class);
     }
 
+    // ======================================== Helper Methods ========================================
+
+    // tìm bàn không có đơn giữ bàn
     private Page<TableModel> excludeTablesWithPendingOrders(Page<TableModel> page) {
+        // lấy danh sách bàn đã có đơn giữ bàn
         Set<Integer> blockedTableNumbers = new HashSet<>(
             orderRepository.findDistinctTableNumbersByOrderStatusIn(
                 OrderTableHoldUtils.TABLE_HOLDING_ORDER_STATUSES
             )
         );
+        // lọc bàn không có đơn giữ bàn
         List<TableModel> content = page.getContent().stream()
             .filter(t -> !blockedTableNumbers.contains(t.getTableNumber()))
             .collect(Collectors.toList());
+        // trả về danh sách bàn không có đơn giữ bàn
         return new PageImpl<>(content, page.getPageable(), content.size());
     }
-
-    // private method
 
     private TableEntity getTable(Integer tableId, LogContext logContext) {
         return tableRepository.findById(tableId).orElseThrow(() -> {
@@ -356,5 +373,61 @@ public class TableServiceImp implements TableService {
             conditions.add(FilterCondition.likeIgnoreCase("location", location));
         }
         return conditions;
+    }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<TableModel> filtersFallback(
+        Integer id, Integer tableNumber, Integer capacity,
+        TableStatus tableStatus, String location, boolean excludeTablesWithPendingOrder,
+        boolean freshSnapshot, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<TableEntity>> conditions = buildFilterConditions(
+            id, tableNumber, capacity, tableStatus, location
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            TABLE_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<TableModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, TableModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<TableModel> createFallback(List<TableRequestModel> tables, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<TableModel> updateFallback(List<TableRequestModel> updates, List<Integer> tableIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "update");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private TableModel markAvailableFallback(Integer tableId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "markAvailable");
+        return null;
     }
 }

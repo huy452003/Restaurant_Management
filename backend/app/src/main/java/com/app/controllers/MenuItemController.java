@@ -23,8 +23,12 @@ import com.common.enums.MenuItemStatus;
 import com.common.models.PaginatedResponse;
 import com.common.models.menu.MenuItemModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.common.models.Response;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -53,6 +57,7 @@ public class MenuItemController {
     }
 
     @GetMapping("/filters")
+    @RateLimiter(name = "controller-public-read", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<MenuItemModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -81,6 +86,7 @@ public class MenuItemController {
     
     @PostMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "menu-item-controller-staff-write", fallbackMethod = "createsFallback")
     public ResponseEntity<Response<List<MenuItemModel>>> create(
         Locale locale,
         @RequestBody @Valid List<MenuItemModel> menuItems
@@ -100,9 +106,9 @@ public class MenuItemController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PutMapping("")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @RateLimiter(name = "menu-item-controller-staff-write", fallbackMethod = "updatesFallback")
     public ResponseEntity<Response<List<MenuItemModel>>> update(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<MenuItemModel> request
@@ -121,4 +127,33 @@ public class MenuItemController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<MenuItemModel>>> filtersFallback(
+        Locale locale, Integer id, String name, 
+        String categoryName, MenuItemStatus menuItemStatus, 
+        Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filters");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<MenuItemModel>>> createsFallback(
+        Locale locale, List<MenuItemModel> menuItems, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "creates");
+        return null;
+    }
+    
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<MenuItemModel>>> updatesFallback(
+        Locale locale, WrapperUpdateRequest<MenuItemModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updates");
+        return null;
+    }
+    
 }

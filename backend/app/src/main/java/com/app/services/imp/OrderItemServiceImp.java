@@ -1,7 +1,10 @@
 package com.app.services.imp;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.app.services.OrderItemService;
 import com.app.services.PaymentService;
@@ -33,14 +36,17 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.util.StringUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
-import jakarta.transaction.Transactional;
+
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -97,6 +103,7 @@ public class OrderItemServiceImp implements OrderItemService {
     private static final BigDecimal TAX_RATE = new BigDecimal("0.08");
 
     @Override
+    @CircuitBreaker(name = "order-item-service-read", fallbackMethod = "filtersFallback")
     public Page<OrderItemModel> filters(
         Integer id, String orderNumber, OrderStatus orderItemStatus, Pageable pageable
     ) {
@@ -152,7 +159,8 @@ public class OrderItemServiceImp implements OrderItemService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "order-item-service-write", fallbackMethod = "createsFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public List<OrderItemModel> create(List<OrderItemCreateModel> orderItems) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating order items ...!", logContext);
@@ -180,6 +188,7 @@ public class OrderItemServiceImp implements OrderItemService {
         );
 
         for(OrderEntity order : ordersByNumber.values()) {
+            // kiểm tra xem user có quyền thao tác với order items của order đó không
             assertCanMutateOrderItems(order, currentUser, logContext);
         }
 
@@ -188,7 +197,9 @@ public class OrderItemServiceImp implements OrderItemService {
             .distinct()
             .collect(Collectors.toList());
 
+        // tạo map để gộp dòng cùng đơn + cùng món + cùng ghi chú bếp (specialInstructions) thành 1 key duy nhất
         Map<String, OrderItemEntity> activeLinesByMergeKey = new HashMap<>();
+
         for (OrderItemEntity existing : orderItemRepository.findByOrder_IdIn(orderIds)) {
             if (existing.getOrderItemStatus() == OrderStatus.CANCELLED) {
                 continue;
@@ -207,7 +218,7 @@ public class OrderItemServiceImp implements OrderItemService {
         }
 
         List<OrderItemEntity> toInsert = new ArrayList<>();
-        List<OrderItemEntity> touched = new ArrayList<>();
+        List<OrderItemEntity> toMerge = new ArrayList<>();
         for (OrderItemCreateModel orderItemModel : orderItems) {
             OrderEntity order = ordersByNumber.get(orderItemModel.getOrderNumber());
             MenuItemEntity menuItem = menuItemsByName.get(orderItemModel.getMenuItemName());
@@ -218,15 +229,16 @@ public class OrderItemServiceImp implements OrderItemService {
             );
 
             OrderItemEntity existing = activeLinesByMergeKey.get(mergeKey);
+            // nếu đã có dòng order item tồn tại thì gộp dòng đó với dòng mới
             if (existing != null) {
                 existing.setQuantity(existing.getQuantity() + orderItemModel.getQuantity());
                 applyPricingFromMenu(existing, menuItem);
-                if (!touched.contains(existing)) {
-                    touched.add(existing);
+                if (!toMerge.contains(existing)) {
+                    toMerge.add(existing);
                 }
                 continue;
             }
-
+            // nếu không có dòng order item tồn tại thì tạo dòng mới
             OrderItemEntity entity = modelMapper.map(orderItemModel, OrderItemEntity.class);
             entity.setOrder(order);
             entity.setMenuItem(menuItem);
@@ -234,20 +246,22 @@ public class OrderItemServiceImp implements OrderItemService {
             applyPricingFromMenu(entity, menuItem);
             toInsert.add(entity);
             activeLinesByMergeKey.put(mergeKey, entity);
-            touched.add(entity);
+            toMerge.add(entity);
         }
 
         if (!toInsert.isEmpty()) {
             orderItemRepository.saveAll(toInsert);
         }
-        List<OrderItemEntity> updated = touched.stream()
+
+        List<OrderItemEntity> updated = toMerge.stream()
             .filter(line -> line.getId() != null)
             .collect(Collectors.toList());
+
         if (!updated.isEmpty()) {
             orderItemRepository.saveAll(updated);
         }
 
-        recalculateOrderAmounts(orderIds);
+        recalculateOrdersFromItems(orderIds);
 
         clearOrderCaches(logContext);
 
@@ -255,14 +269,16 @@ public class OrderItemServiceImp implements OrderItemService {
 
         log.logInfo(
             "completed, " + toInsert.size() + " new line(s), "
-                + (touched.size() - toInsert.size()) + " merged into existing line(s)",
+                + (toMerge.size() - toInsert.size()) + " merged into existing line(s)",
             logContext
         );
-        return touched.stream().map(this::toOrderItemModel).collect(Collectors.toList());
+        return toMerge.stream().map(this::toOrderItemModel).collect(Collectors.toList());
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "order-item-service-write", fallbackMethod = "updateForCustomerFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public OrderItemModel updateForCustomer(OrderItemCustomerUpdateModel update, Integer orderItemId) {
         LogContext logContext = getLogContext("updateForCustomer", Collections.singletonList(orderItemId));
         log.logInfo("Updating order item by customer ...!", logContext);
@@ -282,23 +298,28 @@ public class OrderItemServiceImp implements OrderItemService {
 
         assertCanMutateOrderItems(current.getOrder(), currentUser, logContext);
 
-        boolean hasChanges = !Objects.equals(update.getQuantity(), current.getQuantity())
-            || !Objects.equals(update.getSpecialInstructions(), current.getSpecialInstructions());
+        boolean hasChanges = !Objects.equals(update.getQuantity(), current.getQuantity()) || 
+                             !Objects.equals(update.getSpecialInstructions(), current.getSpecialInstructions());
 
         if(hasChanges) {
             current.setQuantity(update.getQuantity());
             current.setSpecialInstructions(update.getSpecialInstructions());
             applyPricingFromMenu(current, current.getMenuItem());
             orderItemRepository.save(current);
-            recalculateOrderAmounts(Collections.singletonList(current.getOrder().getId()));
+            recalculateOrdersFromItems(Collections.singletonList(current.getOrder().getId()));
             clearOrderCaches(logContext);
+            log.logInfo("completed, updated order item with id: " + orderItemId, logContext);
+        } else {
+            log.logInfo("completed, no changes detected, skipped update", logContext);
         }
 
         return toOrderItemModel(current);
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "order-item-service-admin-write", fallbackMethod = "updateByAdminFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public List<OrderItemModel> updateByAdmin(List<OrderItemAdminUpdateModel> updates, List<Integer> orderItemIds) {
         LogContext logContext = getLogContext("updateByAdmin", orderItemIds);
         log.logInfo("Updating order items by admin/manager ...!", logContext);
@@ -317,9 +338,13 @@ public class OrderItemServiceImp implements OrderItemService {
             "OrderItemModel", logContext, log
         );
 
-        List<OrderItemEntity> fetchedOrderItems = orderItemRepository.findAllById(orderItemIds);
-        Map<Integer, OrderItemEntity> orderItemsById = fetchedOrderItems.stream()
+        // query với map để tránh N+1 query
+        Map<Integer, OrderItemEntity> orderItemsById = orderItemRepository
+            .findAllById(orderItemIds)
+            .stream()
             .collect(Collectors.toMap(OrderItemEntity::getId, Function.identity()));
+
+        // batch lại đúng thứ tự với list ids từ request
         List<OrderItemEntity> foundOrderItems = orderItemIds.stream().map(id -> {
             OrderItemEntity orderItem = orderItemsById.get(id);
             if (orderItem != null) {
@@ -379,7 +404,7 @@ public class OrderItemServiceImp implements OrderItemService {
         ).collect(Collectors.toList());
     }
 
-    // private method
+    // ======================================== Helper Methods ========================================
 
     private OrderItemModel toOrderItemModel(OrderItemEntity entity) {
         OrderItemModel orderItemModel = modelMapper.map(entity, OrderItemModel.class);
@@ -392,9 +417,11 @@ public class OrderItemServiceImp implements OrderItemService {
         return orderItemModel;
     }
 
+    // kiểm tra xem user có quyền thao tác với order items của order đó không
     private void assertCanMutateOrderItems(
         OrderEntity order, UserEntity currentUser, LogContext logContext
     ) {
+        // nếu là customer
         if(currentUser.getRole() == UserRole.CUSTOMER) {
             if(order.getOrderStatus() != OrderStatus.PENDING) {
                 ForbiddenExceptionHandle e = new ForbiddenExceptionHandle(
@@ -415,6 +442,7 @@ public class OrderItemServiceImp implements OrderItemService {
                 throw e;
             }
         } else {
+            // nếu là admin/manager
             // chỉ cho phép update items khi order chưa được cancel/complete
             OrderStatus status = order.getOrderStatus();
             if(status == OrderStatus.CANCELLED || status == OrderStatus.COMPLETED) {
@@ -435,24 +463,30 @@ public class OrderItemServiceImp implements OrderItemService {
         log.logInfo("Deleted order-item and order filter caches after mutation", logContext);
     }
 
-    private void recalculateOrderAmounts(List<Integer> orderIds) {
-        if(orderIds == null || orderIds.isEmpty()) {
-            return;
-        }
-        recalculateOrdersFromItems(orderIds);
-    }
-
+    // tính toán lại tổng amount của order từ order items và cập nhật lại trạng thái của order
     private void recalculateOrdersFromItems(List<Integer> orderIds) {
         if(orderIds == null || orderIds.isEmpty()) {
             return;
         }
         List<OrderEntity> orders = orderRepository.findAllById(orderIds);
-        Map<Integer, List<OrderItemEntity>> itemsByOrderId = orderItemRepository.findByOrder_IdIn(orderIds).stream()
+
+        Map<Integer, List<OrderItemEntity>> itemsByOrderId =
+            // lấy tất cả order items theo order ids
+            orderItemRepository.findByOrder_IdIn(orderIds)
+            .stream()
+            // ở đây ta khai báo gom lại theo item.getOrder().getId() ( key của map )
+            // value của map là list của order items (đã query phía trên), java stream sẽ tự động gom lại theo key
+            // nếu chưa có key thì sẽ tạo mới key đó, new list rồi add value vào list
+            // nếu đã có key thì sẽ add value vào list của key đó
             .collect(Collectors.groupingBy(item -> item.getOrder().getId()));
+
         Set<Integer> tablesToRecheck = new HashSet<>();
 
         for(OrderEntity order : orders) {
-            List<OrderItemEntity> orderItems = itemsByOrderId.getOrDefault(order.getId(), Collections.emptyList());
+
+            List<OrderItemEntity> orderItems = itemsByOrderId.getOrDefault(
+                order.getId(), Collections.emptyList()
+            );
 
             BigDecimal subTotal = orderItems.stream()
                 .map(OrderItemEntity::getSubTotal)
@@ -460,6 +494,7 @@ public class OrderItemServiceImp implements OrderItemService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal tax = subTotal.multiply(TAX_RATE).setScale(2, RoundingMode.HALF_UP);
             BigDecimal totalAmount = subTotal.add(tax).setScale(2, RoundingMode.HALF_UP);
+            // cập nhật lại tổng amount của order
             order.setSubTotal(subTotal);
             order.setTax(tax);
             order.setTotalAmount(totalAmount);
@@ -471,47 +506,66 @@ public class OrderItemServiceImp implements OrderItemService {
             if(itemStatuses.isEmpty()) {
                 continue;
             }
+
+            // xác định trạng thái mới của order từ trạng thái của order items
             OrderStatus targetStatus = determineOrderStatusFromItems(itemStatuses);
+            // lấy trạng thái hiện tại của order
             OrderStatus previousOrderStatus = order.getOrderStatus();
+
+            // kiểm tra xem đã có payment completed nào của order này chưa
             boolean paid = paymentRepository.existsByOrderIdAndPaymentStatus(
                 order.getId(), PaymentStatus.COMPLETED
             );
+
+            // kiểm tra xem trạng thái của order có được phép chuyển sang trạng thái mới không
+            // nếu không được phép thì skip
             if (!OrderStatusTransitionUtils.isAllowedTransition(
                 previousOrderStatus, targetStatus, paid
             )) {
                 continue;
             }
+            // áp dụng trạng thái mới của order
             OrderStatusTransitionUtils.applyOrderStatusTransition(order, targetStatus, paid);
+            // nếu order muốn chuyển sang cancelled thì hủy payment pending của order đó
             if (targetStatus == OrderStatus.CANCELLED && previousOrderStatus != OrderStatus.CANCELLED) {
                 paymentService.cancelPendingPaymentsForOrder(order.getId());
             }
+            // Lần đầu chuyển sang COMPLETED hoặc CANCELLED → sync trạng thái bàn sau save
             boolean becameTerminal = (targetStatus == OrderStatus.CANCELLED || targetStatus == OrderStatus.COMPLETED)
                 && previousOrderStatus != targetStatus;
+            // thêm bàn vào set để sync lại status của bàn
             if (becameTerminal && order.getTable() != null) {
                 tablesToRecheck.add(order.getTable().getTableNumber());
             }
         }
+        // cập nhật lại order
         orderRepository.saveAll(orders);
+        // sync lại status của bàn
         tablesToRecheck.forEach(tableStatusSyncService::syncTableStatus);
     }
 
+    // xác định trạng thái của order từ trạng thái của order items
     private OrderStatus determineOrderStatusFromItems(List<OrderStatus> itemStatuses) {
+        // nếu tất cả order items đều là CANCELLED thì order status là CANCELLED
         if(itemStatuses.stream().allMatch(status -> status == OrderStatus.CANCELLED)) {
             return OrderStatus.CANCELLED;
         }
+        // nếu tất cả order items đều là COMPLETED thì order status là COMPLETED
         if(itemStatuses.stream().allMatch(status -> status == OrderStatus.COMPLETED)) {
             return OrderStatus.COMPLETED;
         }
+        // nếu có ít nhất 1 order item là PREPARING thì order status là PREPARING
         if(itemStatuses.stream().anyMatch(status -> status == OrderStatus.PREPARING)) {
             return OrderStatus.PREPARING;
         }
+        // nếu có ít nhất 1 order item là CONFIRMED thì order status là CONFIRMED
         if(itemStatuses.stream().anyMatch(status -> status == OrderStatus.CONFIRMED)) {
             return OrderStatus.CONFIRMED;
         }
         return OrderStatus.PENDING;
     }
 
-    /** Gộp dòng cùng đơn + cùng món + cùng ghi chú bếp (specialInstructions). */
+    // gộp dòng cùng đơn + cùng món + cùng ghi chú bếp (specialInstructions) thành 1 key duy nhất
     private static String mergeKeyForOrderLine(
         Integer orderId, Integer menuItemId, String specialInstructions
     ) {
@@ -525,6 +579,7 @@ public class OrderItemServiceImp implements OrderItemService {
         return specialInstructions.trim();
     }
 
+    // tính toán lại unit price và sub total của order item từ menu item
     private void applyPricingFromMenu(OrderItemEntity orderItem, MenuItemEntity menuItem) {
         BigDecimal unitPrice = menuItem.getPrice();
         BigDecimal subTotal = unitPrice
@@ -584,4 +639,57 @@ public class OrderItemServiceImp implements OrderItemService {
         return conditions;
     }
 
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<OrderItemModel> filtersFallback(
+        Integer id, String orderNumber, OrderStatus orderItemStatus, Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<OrderItemEntity>> conditions = buildFilterConditions(
+            id, orderNumber, orderItemStatus
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            ORDER_ITEM_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<OrderItemModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, OrderItemModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private List<OrderItemModel> createsFallback(List<OrderItemModel> orderItems, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "creates");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private OrderItemModel updateForCustomerFallback(OrderItemCustomerUpdateModel update, Integer orderItemId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateForCustomer");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private List<OrderItemModel> updateByAdminFallback(List<OrderItemAdminUpdateModel> updates, List<Integer> orderItemIds, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "updateByAdmin");
+        return null;
+    }
 }

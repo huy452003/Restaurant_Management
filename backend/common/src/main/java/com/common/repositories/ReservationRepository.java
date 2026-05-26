@@ -16,6 +16,7 @@ import java.util.List;
 @Repository
 public interface ReservationRepository extends JpaRepository<ReservationEntity, Integer>, JpaSpecificationExecutor<ReservationEntity> {
 
+    // kiểm tra xem có slot đặt bàn nào trùng với slot đặt không
     @Query("""
         SELECT COUNT(r) > 0
         FROM ReservationEntity r
@@ -33,6 +34,7 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
         @Param("excludeId") Integer excludeId
     );
 
+    // kiểm tra xem có reservation nào đang giữ slot / khóa bàn vận hành không
     @Query("""
         SELECT COUNT(r) > 0
         FROM ReservationEntity r

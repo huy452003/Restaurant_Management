@@ -13,17 +13,20 @@ import java.util.stream.Collectors;
 
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.app.services.OrderItemStatusSyncService;
 import com.app.services.PaymentService;
-import com.app.services.TableStatusSyncService;
 import com.app.utils.OrderStatusTransitionUtils;
 import com.app.utils.UserEntityUtils;
 import com.common.entities.OrderEntity;
@@ -45,10 +48,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.handle_exceptions.ForbiddenExceptionHandle;
 import com.handle_exceptions.NotFoundExceptionHandle;
 import com.handle_exceptions.ValidationExceptionHandle;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
-import jakarta.transaction.Transactional;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 @Service
 public class PaymentServiceImp implements PaymentService {
@@ -57,7 +61,8 @@ public class PaymentServiceImp implements PaymentService {
     private static final String ORDER_REDIS_KEY_PREFIX = "order:";
     /** Các Payment đếm vào quota so với order total (FAILED/CANCELLED không chiếm hạn mức). */
     private static final List<PaymentStatus> ALLOCATING_STATUSES = Arrays.asList(
-        PaymentStatus.PENDING, PaymentStatus.COMPLETED);
+        PaymentStatus.PENDING, PaymentStatus.COMPLETED
+    );
 
     private static final int AMOUNT_SCALE = 2;
 
@@ -77,8 +82,6 @@ public class PaymentServiceImp implements PaymentService {
     private UserEntityUtils userEntityUtils;
     @Autowired
     private OrderItemStatusSyncService orderItemStatusSyncService;
-    @Autowired
-    private TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> paymentIds) {
         return LogContext.builder()
@@ -90,6 +93,7 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
+    @CircuitBreaker(name = "payment-service-read", fallbackMethod = "filtersFallback")
     public Page<PaymentModel> filters(
         Integer id, String orderNumber, String cashierFullname,
         PaymentMethod paymentMethod, BigDecimal amount,
@@ -141,7 +145,8 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "payment-service-write", fallbackMethod = "createFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public PaymentModel create(PaymentCreateRequestModel paymentRequest) {
         LogContext logContext = getLogContext("create", Collections.emptyList());
         log.logInfo("Creating payment ...!", logContext);
@@ -177,7 +182,9 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "payment-service-write", fallbackMethod = "completeFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public PaymentModel complete(Integer paymentId) {
         LogContext logContext = getLogContext("complete", Collections.singletonList(paymentId));
         log.logInfo("Completing payment ...!", logContext);
@@ -208,7 +215,9 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "payment-service-write", fallbackMethod = "cancelFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public PaymentModel cancel(Integer paymentId) {
         LogContext logContext = getLogContext("cancel", Collections.singletonList(paymentId));
         log.logInfo("Cancelling payment ...!", logContext);
@@ -235,7 +244,9 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "payment-service-write", fallbackMethod = "cancelPendingPaymentsForOrderFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public void cancelPendingPaymentsForOrder(Integer orderId) {
         LogContext logContext = getLogContext("cancelPendingPaymentsForOrder", Collections.singletonList(orderId));
         List<PaymentEntity> pending = paymentRepository.findByOrder_IdAndPaymentStatus(orderId, PaymentStatus.PENDING);
@@ -254,7 +265,9 @@ public class PaymentServiceImp implements PaymentService {
     }
 
     @Override
-    @Transactional
+    @CircuitBreaker(name = "payment-service-write", fallbackMethod = "markFailedFromGatewayFallback")
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
+    @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public PaymentModel markFailedFromGateway(Integer paymentId) {
         // Đặt trạng thái FAILED cho giao dịch chờ (PENDING) sau khi VNPAY từ chối / lỗi — giữ idempotency ở lớp gọi.
         LogContext logContext = getLogContext("markFailedFromGateway", Collections.singletonList(paymentId));
@@ -276,7 +289,7 @@ public class PaymentServiceImp implements PaymentService {
         return toPaymentModel(payment);
     }
 
-    // private method
+    // ======================================== Helper Methods ========================================
 
     private PaymentModel toPaymentModel(PaymentEntity paymentEntity) {
         PaymentModel paymentModel = modelMapper.map(paymentEntity, PaymentModel.class);
@@ -315,30 +328,39 @@ public class PaymentServiceImp implements PaymentService {
 
     /** CONFIRMED + đủ tiền → PREPARING (bếp); COMPLETED do quầy xác nhận phục vụ. */
     private void maybeAdvanceOrderToPreparingAfterFullPayment(OrderEntity order, LogContext logContext) {
+        // status phải là CONFIRMED
         if (order.getTotalAmount() == null || order.getOrderStatus() != OrderStatus.CONFIRMED) {
             return;
         }
+        // lấy tổng amount của các payment đã thanh toán
         BigDecimal completedSum = Objects.requireNonNullElse(
             paymentRepository.sumCompletedAmountByOrderId(order.getId()),
             BigDecimal.ZERO
         ).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+
+        // lấy tổng amount của đơn
         BigDecimal total = order.getTotalAmount().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        // nếu đã thanh toán đủ tiền thì đóng đơn
         if (completedSum.compareTo(total) != 0) {
             return;
         }
-        OrderStatus previousStatus = order.getOrderStatus();
+        
+        // chuyển sang trạng thái PREPARING
         if (!OrderStatusTransitionUtils.applyPreparingAfterFullPayment(order)) {
             return;
         }
+
+        // đồng bộ trạng thái món theo đơn
         orderItemStatusSyncService.syncItemsWithOrderStatus(
-            order.getId(), OrderStatus.PREPARING, previousStatus
+            order.getId(), OrderStatus.PREPARING, order.getOrderStatus()
         );
+
         orderRepository.save(order);
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
         log.logInfo("Order " + order.getId() + " advanced to PREPARING (fully paid at CONFIRMED)", logContext);
     }
 
-    // Kiểm tra xem đơn có thể nhận thanh toán không
+    // trả true/false khi cần biết đơn có thể nhận thanh toán không
     @Override
     public boolean canAcceptNewPayment(OrderEntity order, int orderItemCount, BigDecimal allocatedAmount) {
         if (order == null || orderItemCount < 1) {
@@ -354,14 +376,16 @@ public class PaymentServiceImp implements PaymentService {
         BigDecimal allocated = Objects.requireNonNullElse(allocatedAmount, BigDecimal.ZERO)
             .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         BigDecimal totalCap = total.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        // nếu số tiền còn lại lớn hơn 0 thì có thể nhận thanh toán
         return totalCap.subtract(allocated).compareTo(BigDecimal.ZERO) > 0;
     }
 
+    // helper method dành cho customer dùng vnpay thanh toán đơn delivery
+    // phải là customer và đơn phải là delivery và email của customer phải trùng với email của người thanh toán
+    // phải là VNPAY
     private void assertPaymentActorMayInitiate(
-        OrderEntity order,
-        UserEntity actor,
-        PaymentMethod method,
-        LogContext logContext
+        OrderEntity order, UserEntity actor,
+        PaymentMethod method, LogContext logContext
     ) {
         if (actor.getRole() != UserRole.CUSTOMER) {
             return;
@@ -395,6 +419,7 @@ public class PaymentServiceImp implements PaymentService {
         }
     }
 
+    // kiểm tra xem đơn có thể nhận thanh toán không, nếu không chặn lại
     private void assertOrderAllowsNewPayment(OrderEntity order, LogContext logContext) {
         OrderStatus orderStatus = order.getOrderStatus();
         if (orderStatus != OrderStatus.CONFIRMED) {
@@ -484,4 +509,74 @@ public class PaymentServiceImp implements PaymentService {
         }
         return conditions;
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private Page<PaymentModel> filtersFallback(
+        Integer id, String orderNumber, String cashierFullname,
+        PaymentMethod paymentMethod, BigDecimal amount,
+        PaymentStatus paymentStatus, String transactionId,
+        Pageable pageable, Exception e
+    ) {
+        // là lỗi nghiệp vụ -> re-throw
+        ResilienceFallbackUtils.rethrowBusinessThrowable(e);
+        // nếu không phải lỗi circuit breaker open -> throw runtime exception
+        if (!ResilienceFallbackUtils.isCircuitBreakerOpen(e)) {
+            ResilienceFallbackUtils.throwAsRuntime(e);
+        }
+
+        // lấy thử data từ cache nếu có
+        List<FilterCondition<PaymentEntity>> conditions = buildFilterConditions(
+            id, orderNumber, cashierFullname,
+            paymentMethod, amount, paymentStatus, transactionId
+        );
+
+        String redisKeyFilters = FilterPageCacheFacade.buildFirstPageKeyIfApplicable(
+            PAYMENT_REDIS_KEY_PREFIX, conditions, pageable);
+            
+        Page<PaymentModel> cachedPage = FilterPageCacheFacade.readFirstPageCache(
+            redisTemplate, redisKeyFilters, pageable, objectMapper, PaymentModel.class);
+
+        if (cachedPage != null && !cachedPage.isEmpty()) {
+            log.logInfo(
+                "Found cache when calling fallback filters method, returning...", 
+                getLogContext("filtersFallback", Collections.emptyList())
+            );
+            return cachedPage;
+        }
+
+        // lỗi circuit breaker open -> throw service unavailable exception
+        throw ResilienceFallbackUtils.serviceUnavailable("filters", e);
+    }
+
+    @SuppressWarnings("unused")
+    private PaymentModel createFallback(PaymentCreateRequestModel paymentRequest, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "create");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private PaymentModel completeFallback(Integer paymentId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "complete");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private PaymentModel cancelFallback(Integer paymentId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "cancel");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private void cancelPendingPaymentsForOrderFallback(Integer orderId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "cancelPendingPaymentsForOrder");
+    }
+
+    @SuppressWarnings("unused")
+    private PaymentModel markFailedFromGatewayFallback(Integer paymentId, Exception e) {
+        ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "markFailedFromGateway");
+        return null;
+    }
+
 }

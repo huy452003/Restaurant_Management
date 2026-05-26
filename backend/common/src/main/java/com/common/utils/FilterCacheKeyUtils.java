@@ -2,6 +2,7 @@ package com.common.utils;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import org.springframework.data.domain.Pageable;
@@ -14,7 +15,7 @@ public final class FilterCacheKeyUtils {
     private FilterCacheKeyUtils() {
     }
 
-    // tạo key 
+    // tạo cache key 
     public static <T> String build(
         String keyPrefix, List<FilterCondition<T>> conditions, Pageable pageable
     ) {
@@ -25,7 +26,8 @@ public final class FilterCacheKeyUtils {
                 .append(condition.getField())
                 .append("=")
                 .append(normalizeFilterValue(condition.getValue(), condition.getMatchType()))
-                .append("&"));
+                .append("&")
+            );
 
         keyBuilder.append("page=").append(pageable.getPageNumber())
             .append("&size=").append(pageable.getPageSize())
@@ -45,7 +47,7 @@ public final class FilterCacheKeyUtils {
         if (value == null) {
             return "null";
         }
-        if (FilterMatchType.LIKE_IGNORE_CASE.equals(matchType) && value instanceof String) {
+        if (Objects.equals(matchType, FilterMatchType.LIKE_IGNORE_CASE) && value instanceof String) {
             return String.valueOf(value).trim().toLowerCase();
         }
         return String.valueOf(value).trim();

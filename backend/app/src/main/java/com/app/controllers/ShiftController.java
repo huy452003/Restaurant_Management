@@ -27,8 +27,12 @@ import com.common.enums.ShiftStatus;
 import com.common.models.PaginatedResponse;
 import com.common.models.user.ShiftModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.common.models.Response;
 import com.logging.services.LoggingService;
+
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import com.logging.models.LogContext;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -57,7 +61,8 @@ public class ShiftController {
     }
 
     @GetMapping("/filters")
-    @PreAuthorize("hasAnyRole('MANAGER','ADMIN','CHEF','CASHIER')")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CASHIER')")
+    @RateLimiter(name = "shift-controller-staff-read", fallbackMethod = "filtersFallback")
     public ResponseEntity<Response<PaginatedResponse<ShiftModel>>> filters(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -87,6 +92,7 @@ public class ShiftController {
     
     @PostMapping("")
     @PreAuthorize("hasAnyRole('MANAGER','ADMIN')")
+    @RateLimiter(name = "shift-controller-staff-write", fallbackMethod = "createFallback")
     public ResponseEntity<Response<List<ShiftModel>>> create(
         Locale locale,
         @RequestBody @Valid List<ShiftModel> shifts
@@ -106,9 +112,9 @@ public class ShiftController {
         return ResponseEntity.status(response.statusCode()).body(response);
     }
 
-
     @PutMapping("")
     @PreAuthorize("hasAnyRole('MANAGER','ADMIN')")
+    @RateLimiter(name = "shift-controller-staff-write", fallbackMethod = "updateFallback")
     public ResponseEntity<Response<List<ShiftModel>>> update(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<ShiftModel> request
@@ -127,4 +133,33 @@ public class ShiftController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<ShiftModel>>> filtersFallback(
+        Locale locale, Integer id, LocalDate shiftDate, 
+        LocalDateTime startTime, LocalDateTime endTime, 
+        ShiftStatus shiftStatus, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersFallback");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<ShiftModel>>> createFallback(
+        Locale locale, List<ShiftModel> shifts, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "createFallback");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<ShiftModel>>> updateFallback(
+        Locale locale, WrapperUpdateRequest<ShiftModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateFallback");
+        return null;
+    }
+    
 }

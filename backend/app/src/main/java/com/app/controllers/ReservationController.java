@@ -12,9 +12,11 @@ import com.common.models.reservation.ReservationCustomerCreateModel;
 import com.common.models.reservation.ReservationCustomerUpdateModel;
 import com.common.models.reservation.ReservationModel;
 import com.common.models.wrapper.WrapperUpdateRequest;
+import com.handle_exceptions.support.ResilienceFallbackUtils;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -66,6 +68,7 @@ public class ReservationController {
 
     @GetMapping("/filters")
     @PreAuthorize("hasRole('CUSTOMER')")
+    @RateLimiter(name = "reservation-controller-customer-read", fallbackMethod = "filtersForCustomerFallback")
     public ResponseEntity<Response<PaginatedResponse<ReservationModel>>> filtersForCustomer(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -96,6 +99,7 @@ public class ReservationController {
 
     @GetMapping("/filters/admin")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    @RateLimiter(name = "reservation-controller-staff-read", fallbackMethod = "filtersForAdminFallback")
     public ResponseEntity<Response<PaginatedResponse<ReservationModel>>> filtersForAdmin(
         Locale locale,
         @RequestParam(required = false) @Min(value = 1, message = "{validate.param.id.min}") Integer id,
@@ -129,7 +133,8 @@ public class ReservationController {
     }
 
     @GetMapping("/availability")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'ADMIN', 'MANAGER', 'CASHIER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER','CUSTOMER')")
+    @RateLimiter(name = "reservation-controller-availability", fallbackMethod = "availabilityFallback")
     public ResponseEntity<Response<ReservationAvailabilityModel>> availability(
         Locale locale,
         @RequestParam @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer tableNumber,
@@ -152,6 +157,7 @@ public class ReservationController {
 
     @PostMapping("")
     @PreAuthorize("hasRole('CUSTOMER')")
+    @RateLimiter(name = "reservation-controller-customer-write", fallbackMethod = "createFallback")
     public ResponseEntity<Response<List<ReservationModel>>> create(
         Locale locale,
         @RequestBody @Valid List<ReservationCustomerCreateModel> reservations
@@ -173,6 +179,7 @@ public class ReservationController {
 
     @PatchMapping("{reservationId}")
     @PreAuthorize("hasAnyRole('CUSTOMER')")
+    @RateLimiter(name = "reservation-controller-customer-write", fallbackMethod = "updateForCustomerFallback")
     public ResponseEntity<Response<ReservationModel>> updateForCustomer(
         Locale locale,
         @RequestBody @Valid ReservationCustomerUpdateModel request,
@@ -198,6 +205,7 @@ public class ReservationController {
 
     @PutMapping("/admin")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    @RateLimiter(name = "reservation-controller-staff-write", fallbackMethod = "updateByAdminFallback")
     public ResponseEntity<Response<List<ReservationModel>>> updateByAdmin(
         Locale locale,
         @RequestBody @Valid WrapperUpdateRequest<ReservationAdminRequestModel> request
@@ -222,6 +230,7 @@ public class ReservationController {
 
     @PatchMapping("/cancel/{reservationId}")
     @PreAuthorize("isAuthenticated()")
+    @RateLimiter(name = "controller-public-write", fallbackMethod = "cancelFallback")
     public ResponseEntity<Response<ReservationModel>> cancel(
         Locale locale,
         @PathVariable @NotNull @Min(value = 1, message = "{validate.param.id.min}") Integer reservationId
@@ -240,4 +249,68 @@ public class ReservationController {
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);
     }
+
+    // ======================================== Fallback Methods ========================================
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<ReservationModel>>> filtersForCustomerFallback(
+        Locale locale, Integer id, Integer tableNumber, 
+        LocalDate reservationDate, LocalTime reservationTime, Integer numberOfGuests, 
+        ReservationStatus reservationStatus, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersForCustomer");
+        return null;
+    }   
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<PaginatedResponse<ReservationModel>>> filtersForAdminFallback(
+        Locale locale, Integer id, String customerName, 
+        String customerPhone, String customerEmail, Integer tableNumber, 
+        LocalDate reservationDate, LocalTime reservationTime, Integer numberOfGuests, 
+        ReservationStatus reservationStatus, Pageable pageable, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "filtersForAdmin");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<ReservationAvailabilityModel>> availabilityFallback(
+        Locale locale, Integer tableNumber, LocalDate date, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "availability");
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<ReservationModel>>> createFallback(
+        Locale locale, List<ReservationCustomerCreateModel> reservations, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "create");
+        return null;
+    }   
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<ReservationModel>> updateForCustomerFallback(
+        Locale locale, ReservationCustomerUpdateModel request, Integer reservationId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateForCustomer");
+        return null;
+    }   
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<List<ReservationModel>>> updateByAdminFallback(
+        Locale locale, WrapperUpdateRequest<ReservationAdminRequestModel> request, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "updateByAdmin");
+        return null;
+    }   
+
+    @SuppressWarnings("unused")
+    private ResponseEntity<Response<ReservationModel>> cancelFallback(
+        Locale locale, Integer reservationId, Exception e
+    ) {
+        ResilienceFallbackUtils.propagateRateLimitFailure(e, "cancel");
+        return null;
+    }       
+
 }

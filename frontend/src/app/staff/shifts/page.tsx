@@ -47,7 +47,7 @@ export default function StaffShiftsPage() {
       router.replace("/login?next=/staff/shifts");
       return;
     }
-    if (!hasRole("ADMIN", "MANAGER", "CHEF", "CASHIER")) {
+    if (!hasRole("ADMIN", "MANAGER", "CASHIER")) {
       router.replace("/staff");
       return;
     }

@@ -15,6 +15,7 @@ public class OrderConfirmedUnpaidExpiryScheduler {
     @Autowired
     private LoggingService log;
 
+    // scheduler hủy đơn CONFIRMED chưa thanh toán đủ (DINE_IN + DELIVERY) và payment PENDING treo sau TTL
     @Scheduled(fixedRateString = "${order.confirmed.unpaid.expiry-check-interval-ms:60000}")
     public void expireStaleConfirmedUnpaidOrders() {
         LogContext logContext = LogContext.builder()
