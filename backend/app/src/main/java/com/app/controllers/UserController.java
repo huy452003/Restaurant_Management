@@ -291,13 +291,13 @@ public class UserController {
         LogContext logContext = getLogContext("resendVerificationToken", Collections.emptyList());
         log.logInfo("is running, preparing to call service ...!", logContext);
 
-        String verificationToken = userService.resendVerificationToken(email);
+        userService.resendVerificationToken(email);
         Response<String> response = new Response<>(
             200,
             messageSource.getMessage("response.message.resendVerificationTokenSuccess", null, locale),
             "userModel",
             null,
-            "verificationToken: " + verificationToken
+            "Verification email sent to " + email
         );
         log.logInfo("completed, returning response ...!", logContext);
         return ResponseEntity.status(response.statusCode()).body(response);

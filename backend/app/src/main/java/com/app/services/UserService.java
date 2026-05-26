@@ -32,5 +32,5 @@ public interface UserService {
     List<UserModel> updatesForAdmin(List<UpdateUserForAdminModel> updates, List<Integer> userIds);
     UserModel updatePasswordByCustomer(UserUpdatePasswordRequestModel update, Integer userId);
     UserModel verifyAndActivate(String verificationToken);
-    String resendVerificationToken(String email);
+    void resendVerificationToken(String email);
 }

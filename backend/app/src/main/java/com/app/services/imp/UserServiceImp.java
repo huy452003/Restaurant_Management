@@ -1,5 +1,6 @@
 package com.app.services.imp;
 
+import com.app.services.EmailService;
 import com.app.services.PendingUserRegistrationStore;
 import com.app.services.UserService;
 import com.app.utils.UserEntityUtils;
@@ -95,6 +96,8 @@ public class UserServiceImp implements UserService {
     private BlackListService blackListService;
     @Autowired
     private PendingUserRegistrationStore pendingUserRegistrationStore;
+    @Autowired  
+    private EmailService emailService;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds){
         return LogContext.builder()
@@ -338,10 +341,10 @@ public class UserServiceImp implements UserService {
             );
             pendingUserRegistrationStore.save(pending);
 
+            emailService.sendVerificationEmail(register.getEmail(), jwtService.generateVerificationToken(registrationId));
+
             UserRegisterModel userRegisterModel = modelMapper.map(register, UserRegisterModel.class);
             userRegisterModel.setUserStatus(UserStatus.PENDING);
-            userRegisterModel.setVerificationToken(jwtService.generateVerificationToken(registrationId));
-            userRegisterModel.setVerificationTokenExpires(formatExpirationTime(jwtConfig.verificationExpiration()));
             if (register.getBirth() != null) {
                 userRegisterModel.setAge(AgeUtils.calculateAge(register.getBirth()));
             }
@@ -712,7 +715,7 @@ public class UserServiceImp implements UserService {
     @CircuitBreaker(name = "user-service-register-verify", fallbackMethod = "resendVerificationTokenFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
-    public String resendVerificationToken(String email) {
+    public void resendVerificationToken(String email) {
         String normalizedEmail = email.toLowerCase().trim();
         LogContext logContext = getLogContext("resendVerificationToken", Collections.emptyList());
         log.logInfo("Resending verification token for email=" + normalizedEmail, logContext);
@@ -740,9 +743,8 @@ public class UserServiceImp implements UserService {
         }
 
         pendingUserRegistrationStore.refreshTtl(pending);
-        String verificationToken = jwtService.generateVerificationToken(registrationId);
-        log.logInfo("completed, resent verification token for registration: " + registrationId, logContext);
-        return verificationToken;
+        log.logInfo("completed, resent verification email for registration: " + registrationId, logContext);
+        emailService.sendVerificationEmail(pending.getEmail(), jwtService.generateVerificationToken(registrationId));
     }
 
     // ======================================== Helper Methods ========================================

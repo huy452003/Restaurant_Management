@@ -86,7 +86,7 @@ export default function RegisterPage() {
           },
         ]),
       });
-      router.push("/login?registered=1");
+      router.push("/login?registered=1&email=" + encodeURIComponent(email.trim()));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Đăng ký thất bại");
     } finally {

@@ -32,6 +32,4 @@ public class UserRegisterModel extends BaseModel{
     private String expires;
     private String refreshToken;
     private String refreshExpires;
-    private String verificationToken;
-    private String verificationTokenExpires;
 }

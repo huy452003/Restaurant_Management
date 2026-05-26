@@ -8,7 +8,7 @@
         <artifactId>Restaurant_Management</artifactId>
         <version>4.0.1</version>
         <relativePath>../pom.xml</relativePath>
-      </parent>
+    </parent>
 
 	<groupId>com.app</groupId>
 	<artifactId>app</artifactId>
@@ -66,6 +66,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<!-- spring boot mail dependencies -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
 		<!-- database dependencies -->
 		<dependency>

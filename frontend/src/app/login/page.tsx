@@ -71,7 +71,7 @@ function LoginForm() {
       <form onSubmit={onSubmit} className="space-y-5">
         {registered ? (
           <AuthAlert variant="success">
-            Đăng ký thành công. Vui lòng xác minh email (nếu chưa) rồi đăng nhập.
+            Đăng ký thành công! Vui lòng kiểm tra hộp thư email để xác thực tài khoản trước khi đăng nhập.
           </AuthAlert>
         ) : null}
         {error ? <AuthAlert variant="error">{error}</AuthAlert> : null}
