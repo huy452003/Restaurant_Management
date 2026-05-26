@@ -103,7 +103,7 @@ public class ReservationServiceImp implements ReservationService {
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
     @Override
-    @CircuitBreaker(name = "reservation-service-admin-read", fallbackMethod = "filtersForCustomerFallback")
+    @CircuitBreaker(name = "reservation-service-read", fallbackMethod = "filtersForCustomerFallback")
     public Page<ReservationModel> filtersForCustomer(
         Integer id, Integer tableNumber, LocalDate reservationDate, LocalTime reservationTime,
         Integer numberOfGuests, ReservationStatus reservationStatus, Pageable pageable

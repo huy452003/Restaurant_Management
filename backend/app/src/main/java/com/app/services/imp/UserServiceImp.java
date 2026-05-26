@@ -354,7 +354,7 @@ public class UserServiceImp implements UserService {
 
     // update user normal - user tự update thông tin của chính mình
     @Override
-    @CircuitBreaker(name = "user-service-write", fallbackMethod = "updateNormalFallback")
+    @CircuitBreaker(name = "user-service-register-verify", fallbackMethod = "updateNormalFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel updateNormal(UpdateUserNormalModel update, Integer userId) {
@@ -635,7 +635,7 @@ public class UserServiceImp implements UserService {
 
     // verify and activate user
     @Override
-    @CircuitBreaker(name = "user-service-verify", fallbackMethod = "verifyAndActivateFallback")
+    @CircuitBreaker(name = "user-service-register-verify", fallbackMethod = "verifyAndActivateFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public UserModel verifyAndActivate(String verificationToken) {
@@ -709,7 +709,7 @@ public class UserServiceImp implements UserService {
 
     // resend verification token
     @Override
-    @CircuitBreaker(name = "user-service-verify", fallbackMethod = "resendVerificationTokenFallback")
+    @CircuitBreaker(name = "user-service-register-verify", fallbackMethod = "resendVerificationTokenFallback")
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     @Retryable(value = {OptimisticLockingFailureException.class}, maxAttempts = 3)
     public String resendVerificationToken(String email) {

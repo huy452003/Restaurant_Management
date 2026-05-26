@@ -676,7 +676,7 @@ public class OrderItemServiceImp implements OrderItemService {
     }
 
     @SuppressWarnings("unused")
-    private List<OrderItemModel> createsFallback(List<OrderItemModel> orderItems, Exception e) {
+    private List<OrderItemModel> createsFallback(List<OrderItemCreateModel> orderItems, Exception e) {
         ResilienceFallbackUtils.propagateCircuitBreakerFailure(e, "creates");
         return null;
     }
