@@ -235,7 +235,7 @@ public class CategoryServiceImp implements CategoryService {
         }
 
         if(!categoriesToUpdate.isEmpty()) {
-            categoryRepository.saveAll(categoriesToUpdate);
+            categoryRepository.saveAllAndFlush(categoriesToUpdate);
             log.logInfo("completed, updated " + categoriesToUpdate.size() + " categories", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);

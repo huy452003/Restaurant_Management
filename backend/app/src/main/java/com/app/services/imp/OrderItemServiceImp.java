@@ -305,7 +305,7 @@ public class OrderItemServiceImp implements OrderItemService {
             current.setQuantity(update.getQuantity());
             current.setSpecialInstructions(update.getSpecialInstructions());
             applyPricingFromMenu(current, current.getMenuItem());
-            orderItemRepository.save(current);
+            orderItemRepository.saveAndFlush(current);
             recalculateOrdersFromItems(Collections.singletonList(current.getOrder().getId()));
             clearOrderCaches(logContext);
             log.logInfo("completed, updated order item with id: " + orderItemId, logContext);
@@ -386,7 +386,7 @@ public class OrderItemServiceImp implements OrderItemService {
         }
 
         if(!orderItemsToUpdate.isEmpty()) {
-            orderItemRepository.saveAll(orderItemsToUpdate);
+            orderItemRepository.saveAllAndFlush(orderItemsToUpdate);
             List<Integer> affectedOrderIds = orderItemsToUpdate.stream()
                 .map(orderItem -> orderItem.getOrder().getId())
                 .distinct()
@@ -539,7 +539,7 @@ public class OrderItemServiceImp implements OrderItemService {
             }
         }
         // cập nhật lại order
-        orderRepository.saveAll(orders);
+        orderRepository.saveAllAndFlush(orders);
         // sync lại status của bàn
         tablesToRecheck.forEach(tableStatusSyncService::syncTableStatus);
     }

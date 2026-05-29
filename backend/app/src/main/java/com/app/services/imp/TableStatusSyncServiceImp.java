@@ -72,7 +72,7 @@ public class TableStatusSyncServiceImp implements TableStatusSyncService {
             }
 
             table.setTableStatus(target);
-            tableRepository.save(table);
+            tableRepository.saveAndFlush(table);
 
             FilterPageCacheFacade.clearFirstPageCache(redisTemplate, TABLE_REDIS_KEY_PREFIX);
 

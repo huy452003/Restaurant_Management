@@ -298,7 +298,7 @@ public class ReservationServiceImp implements ReservationService {
             currentReservation.setReservationTime(update.getReservationTime());
             currentReservation.setNumberOfGuests(update.getNumberOfGuests());
             currentReservation.setSpecialRequest(update.getSpecialRequest());
-            reservationRepository.save(currentReservation);
+            reservationRepository.saveAndFlush(currentReservation);
             tableStatusSyncService.syncTableStatus(tableNumber);
             log.logInfo("completed, updated reservation with id: " + reservationId, logContext);
         } else {
@@ -408,7 +408,7 @@ public class ReservationServiceImp implements ReservationService {
         }
 
         if (!reservationsToUpdate.isEmpty()) {
-            reservationRepository.saveAll(reservationsToUpdate);
+            reservationRepository.saveAllAndFlush(reservationsToUpdate);
             tablesToSync.forEach(tableStatusSyncService::syncTableStatus);
             log.logInfo("completed, updated " + reservationsToUpdate.size() + " reservations", logContext);
         } else {
@@ -459,7 +459,7 @@ public class ReservationServiceImp implements ReservationService {
         }
 
         foundReservation.setReservationStatus(ReservationStatus.CANCELLED);
-        reservationRepository.save(foundReservation);
+        reservationRepository.saveAndFlush(foundReservation);
         syncTableForReservation(foundReservation);
 
         clearReservationAndTableCaches(logContext, "cancel");

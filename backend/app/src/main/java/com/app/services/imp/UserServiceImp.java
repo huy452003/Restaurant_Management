@@ -421,7 +421,7 @@ public class UserServiceImp implements UserService {
         if (hasChanges) {
             // Map các field từ update model vào UserEntity
             modelMapper.map(update, currentUser);
-            userRepository.save(currentUser);
+            userRepository.saveAndFlush(currentUser);
             log.logInfo("completed, updated user with id: " + userId, logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
@@ -567,7 +567,7 @@ public class UserServiceImp implements UserService {
         }
 
         if(!usersToUpdate.isEmpty()){
-            userRepository.saveAll(usersToUpdate);
+            userRepository.saveAllAndFlush(usersToUpdate);
             log.logInfo("completed, updated " + usersToUpdate.size() + " users by admin", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
@@ -631,7 +631,7 @@ public class UserServiceImp implements UserService {
         }
 
         currentUser.setPassword(passwordEncoder.encode(update.getNewPassword()));
-        userRepository.save(currentUser);
+        userRepository.saveAndFlush(currentUser);
         log.logInfo("completed, updated password for user with id: " + userId, logContext);
         return toUserModel(currentUser);
     }
@@ -701,7 +701,7 @@ public class UserServiceImp implements UserService {
         userEntity.setAddress(pending.getAddress());
         userEntity.setRole(pending.getRole());
         userEntity.setUserStatus(UserStatus.ACTIVE);
-        userRepository.save(userEntity);
+        userRepository.saveAndFlush(userEntity);
 
         pendingUserRegistrationStore.delete(pending);
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, USER_REDIS_KEY_PREFIX);

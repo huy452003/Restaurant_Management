@@ -280,7 +280,7 @@ public class OrderServiceImp implements OrderService {
             assignTableForOrder(foundOrder, update.getOrderType(), update.getTableNumber(), currentUser, logContext);
             foundOrder.setOrderType(update.getOrderType());
             foundOrder.setNotes(update.getNotes());
-            orderRepository.save(foundOrder);
+            orderRepository.saveAndFlush(foundOrder);
             log.logInfo("completed, updated order with id: " + orderId, logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);
@@ -403,7 +403,7 @@ public class OrderServiceImp implements OrderService {
         }
 
         if(!ordersToUpdate.isEmpty()) {
-            orderRepository.saveAll(ordersToUpdate);
+            orderRepository.saveAllAndFlush(ordersToUpdate);
             tablesToRecheck.forEach(tableStatusSyncService::syncTableStatus);
             log.logInfo("completed, updated " + ordersToUpdate.size() + " orders", logContext);
         } else {
@@ -460,7 +460,7 @@ public class OrderServiceImp implements OrderService {
         orderItemStatusSyncService.syncItemsWithOrderStatus(
             foundOrder.getId(), OrderStatus.CONFIRMED, previousSubmitStatus
         );
-        orderRepository.save(foundOrder);
+        orderRepository.saveAndFlush(foundOrder);
 
         if (foundOrder.getOrderType() == OrderType.DINE_IN && foundOrder.getTable() != null) {
             tableStatusSyncService.syncTableStatus(foundOrder.getTable().getTableNumber());
@@ -764,7 +764,7 @@ public class OrderServiceImp implements OrderService {
             foundOrder.getId(), OrderStatus.CANCELLED, previousStatus
         );
 
-        orderRepository.save(foundOrder);
+        orderRepository.saveAndFlush(foundOrder);
 
         // hủy tất cả các payment pending của đơn
         paymentService.cancelPendingPaymentsForOrder(foundOrder.getId());

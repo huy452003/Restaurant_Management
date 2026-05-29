@@ -263,7 +263,7 @@ public class TableServiceImp implements TableService {
         }
 
         if(!tablesToUpdate.isEmpty()) {
-            tableRepository.saveAll(tablesToUpdate);
+            tableRepository.saveAllAndFlush(tablesToUpdate);
             log.logInfo("completed, updated " + tablesToUpdate.size() + " tables", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);

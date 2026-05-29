@@ -255,7 +255,7 @@ public class MenuItemServiceImp implements MenuItemService{
         }
 
         if(!menuItemsToUpdate.isEmpty()) {
-            menuItemRepository.saveAll(menuItemsToUpdate);
+            menuItemRepository.saveAllAndFlush(menuItemsToUpdate);
             log.logInfo("completed, updated " + menuItemsToUpdate.size() + " menu items", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);

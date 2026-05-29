@@ -265,7 +265,7 @@ public class ShiftServiceImp implements ShiftService {
         }
 
         if(!shiftsToUpdate.isEmpty()) {
-            shiftRepository.saveAll(shiftsToUpdate);
+            shiftRepository.saveAllAndFlush(shiftsToUpdate);
             log.logInfo("completed, updated " + shiftsToUpdate.size() + " shifts", logContext);
         } else {
             log.logInfo("completed, no changes detected, skipped update", logContext);

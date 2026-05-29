@@ -202,7 +202,7 @@ public class PaymentServiceImp implements PaymentService {
 
         payment.setPaymentStatus(PaymentStatus.COMPLETED);
         payment.setPaidAt(LocalDateTime.now());
-        paymentRepository.save(payment);
+        paymentRepository.saveAndFlush(payment);
         paymentRepository.flush();
 
         OrderEntity order = resolveOrderByOrderNumber(payment.getOrder().getOrderNumber(), logContext);
@@ -235,7 +235,7 @@ public class PaymentServiceImp implements PaymentService {
 
         payment.setPaymentStatus(PaymentStatus.CANCELLED);
         payment.setPaidAt(LocalDateTime.now());
-        paymentRepository.save(payment);
+        paymentRepository.saveAndFlush(payment);
 
         clearPaymentAndOrderCaches(logContext);
 
@@ -258,8 +258,7 @@ public class PaymentServiceImp implements PaymentService {
             p.setPaymentStatus(PaymentStatus.CANCELLED);
             p.setPaidAt(now);
         }
-        paymentRepository.saveAll(pending);
-        paymentRepository.flush();
+        paymentRepository.saveAllAndFlush(pending);
         clearPaymentAndOrderCaches(logContext);
         log.logInfo("cancelled " + pending.size() + " pending payment(s) for order " + orderId, logContext);
     }
@@ -281,8 +280,7 @@ public class PaymentServiceImp implements PaymentService {
 
         payment.setPaymentStatus(PaymentStatus.FAILED);
         payment.setPaidAt(LocalDateTime.now());
-        paymentRepository.save(payment);
-        paymentRepository.flush();
+        paymentRepository.saveAndFlush(payment);
 
         clearPaymentAndOrderCaches(logContext);
         log.logInfo("completed, payment " + paymentId + " marked FAILED", logContext);
@@ -355,7 +353,7 @@ public class PaymentServiceImp implements PaymentService {
             order.getId(), OrderStatus.PREPARING, order.getOrderStatus()
         );
 
-        orderRepository.save(order);
+        orderRepository.saveAndFlush(order);
         FilterPageCacheFacade.clearFirstPageCache(redisTemplate, ORDER_REDIS_KEY_PREFIX);
         log.logInfo("Order " + order.getId() + " advanced to PREPARING (fully paid at CONFIRMED)", logContext);
     }
