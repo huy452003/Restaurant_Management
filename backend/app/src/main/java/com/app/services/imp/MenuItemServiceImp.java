@@ -13,13 +13,10 @@ import java.util.Collections;
 import org.springframework.util.StringUtils;
 
 import org.modelmapper.ModelMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.retry.annotation.Retryable;
@@ -46,21 +43,17 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class MenuItemServiceImp implements MenuItemService{
-    @Autowired
-    private MenuItemRepository menuItemRepository;
-    @Autowired
-    private CategoryRepository categoryRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
+    private final MenuItemRepository menuItemRepository;
+    private final CategoryRepository categoryRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
 
     private LogContext getLogContext(String methodName, List<Integer> menuItemIds){
         return LogContext.builder()

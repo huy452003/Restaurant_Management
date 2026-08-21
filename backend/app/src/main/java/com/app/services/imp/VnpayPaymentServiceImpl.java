@@ -13,7 +13,6 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 import org.modelmapper.ModelMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -44,21 +43,17 @@ import com.logging.services.LoggingService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class VnpayPaymentServiceImpl implements VnpayPaymentService {
-    @Autowired
-    private VnpayProperties vnpayProperties;
-    @Autowired
-    private PaymentService paymentService;
-    @Autowired
-    private PaymentRepository paymentRepository;
-    @Autowired
-    private OrderRepository orderRepository;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
+    private final VnpayProperties vnpayProperties;
+    private final PaymentService paymentService;
+    private final PaymentRepository paymentRepository;
+    private final OrderRepository orderRepository;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
 
     private static final String VNP_RSP_SUCCESS = "00";
     private static final String VNP_VERSION = "2.1.0";

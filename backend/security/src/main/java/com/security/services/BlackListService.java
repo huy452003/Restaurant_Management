@@ -1,12 +1,13 @@
 package com.security.services;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
+
+import lombok.RequiredArgsConstructor;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -16,14 +17,12 @@ import java.util.List;
 import java.util.Collections;
 
 @Service
+@RequiredArgsConstructor
 public class BlackListService {
-    @Autowired
     @Qualifier("customStringRedisTemplate")
-    private RedisTemplate<String, String> redisTemplate;
-    @Autowired
-    private JwtService jwtService;
-    @Autowired
-    private LoggingService log;
+    private final RedisTemplate<String, String> redisTemplate;
+    private final JwtService jwtService;
+    private final LoggingService log;
 
     private static final String BLACK_LIST_PREFIX = "black_list:";
 

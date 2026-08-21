@@ -12,10 +12,7 @@ public final class OrderItemStatusSyncUtils {
     private OrderItemStatusSyncUtils() {
     }
 
-    /**
-     * Đồng bộ trạng thái món theo đơn khi đơn đổi trạng thái (nguồn: cập nhật đơn / hủy / hoàn thành).
-     * Món đã {@link OrderStatus#CANCELLED} giữ nguyên, trừ khi cả đơn bị hủy.
-     */
+    // Đồng bộ trạng thái món theo đơn khi đơn đổi trạng thái (nguồn: cập nhật đơn / hủy / hoàn thành).
     public static List<OrderItemEntity> syncItemsWithOrderStatus(
         List<OrderItemEntity> items,
         OrderStatus orderStatus

@@ -1,6 +1,5 @@
 package com.app.services.imp;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -47,6 +46,7 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -63,31 +63,22 @@ import java.util.Objects;
 import java.util.Set;
 
 import org.modelmapper.ModelMapper;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class OrderItemServiceImp implements OrderItemService {
-    @Autowired
-    private OrderItemRepository orderItemRepository;
-    @Autowired
-    private OrderRepository orderRepository;
-    @Autowired
-    private UserEntityUtils userEntityUtils;
-    @Autowired
-    private MenuItemRepository menuItemRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
-    @Autowired
-    private PaymentService paymentService;
-    @Autowired
-    private PaymentRepository paymentRepository;
-    @Autowired
-    private TableStatusSyncService tableStatusSyncService;
+    private final OrderItemRepository orderItemRepository;
+    private final OrderRepository orderRepository;
+    private final UserEntityUtils userEntityUtils;
+    private final MenuItemRepository menuItemRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
+    private final PaymentService paymentService;
+    private final PaymentRepository paymentRepository;
+    private final TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> orderItemIds) {
         return LogContext.builder()
@@ -114,7 +105,7 @@ public class OrderItemServiceImp implements OrderItemService {
             id, orderNumber, orderItemStatus
         );
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderItemModel", logContext, log
+            "OrderItemModel", logContext
         );
         if (currentUser.getRole() == UserRole.CUSTOMER) {
             conditions.add(FilterCondition.eq("order.customerEmail", currentUser.getEmail()));
@@ -166,7 +157,7 @@ public class OrderItemServiceImp implements OrderItemService {
         log.logInfo("Creating order items ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderItemModel", logContext, log
+            "OrderItemModel", logContext
         );
 
         Map<String, OrderEntity> ordersByNumber = orderItems.stream()
@@ -284,7 +275,7 @@ public class OrderItemServiceImp implements OrderItemService {
         log.logInfo("Updating order item by customer ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderItemModel", logContext, log
+            "OrderItemModel", logContext
         );
         OrderItemEntity current = orderItemRepository.findById(orderItemId).orElseThrow(() -> {
             NotFoundExceptionHandle e = new NotFoundExceptionHandle(
@@ -335,7 +326,7 @@ public class OrderItemServiceImp implements OrderItemService {
         }
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderItemModel", logContext, log
+            "OrderItemModel", logContext
         );
 
         // query với map để tránh N+1 query

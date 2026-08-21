@@ -1,6 +1,5 @@
 package com.app.services.imp;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -52,7 +51,6 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -70,34 +68,24 @@ import java.util.function.Function;
 
 import org.modelmapper.ModelMapper;
 
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class OrderServiceImp implements OrderService {
-    @Autowired
-    private OrderRepository orderRepository;
-    @Autowired
-    private PaymentRepository paymentRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private UserEntityUtils userEntityUtils;
-    @Autowired
-    private TableRepository tableRepository;
-    @Autowired
-    private OrderItemRepository orderItemRepository;
-    @Autowired
-    private PaymentService paymentService;
-    @Autowired
-    private OrderItemStatusSyncService orderItemStatusSyncService;
-    @Autowired
-    private TableStatusSyncService tableStatusSyncService;
+    private final OrderRepository orderRepository;
+    private final PaymentRepository paymentRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
+    private final UserRepository userRepository;
+    private final UserEntityUtils userEntityUtils;
+    private final TableRepository tableRepository;
+    private final OrderItemRepository orderItemRepository;
+    private final PaymentService paymentService;
+    private final OrderItemStatusSyncService orderItemStatusSyncService;
+    private final TableStatusSyncService tableStatusSyncService;
 
     @Value("${order.pending.expiry-minutes:5}")
     private int pendingOrderExpiryMinutes;
@@ -163,7 +151,7 @@ public class OrderServiceImp implements OrderService {
             orderStatus, orderType, subTotal, tax, totalAmount
         );
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
         if (currentUser.getRole() == UserRole.CUSTOMER) {
             conditions.add(FilterCondition.eq("customerEmail", currentUser.getEmail()));
@@ -219,7 +207,7 @@ public class OrderServiceImp implements OrderService {
         log.logInfo("Creating order ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
 
         OrderEntity orderEntity = modelMapper.map(order, OrderEntity.class);
@@ -256,7 +244,7 @@ public class OrderServiceImp implements OrderService {
         log.logInfo("Updating order ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
         OrderEntity foundOrder = getOrder(orderId, logContext);
         orderOwnerCheck(foundOrder, currentUser, logContext);
@@ -300,7 +288,7 @@ public class OrderServiceImp implements OrderService {
         log.logInfo("Updating orders by staff ...!", logContext);
 
         UserEntity actingUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
 
         if(updates.size() != orderIds.size()){
@@ -430,7 +418,7 @@ public class OrderServiceImp implements OrderService {
         log.logInfo("Submitting order ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
         OrderEntity foundOrder = getOrder(orderId, logContext);
         orderOwnerCheck(foundOrder, currentUser, logContext);
@@ -481,7 +469,7 @@ public class OrderServiceImp implements OrderService {
         log.logInfo("Cancelling order ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "OrderModel", logContext, log
+            "OrderModel", logContext
         );
         OrderEntity foundOrder = getOrder(orderId, logContext);
         orderOwnerCheck(foundOrder, currentUser, logContext);

@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -15,15 +14,16 @@ import com.common.enums.OrderStatus;
 import com.common.repositories.OrderItemRepository;
 import com.common.utils.FilterPageCacheFacade;
 
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class OrderItemStatusSyncServiceImp implements OrderItemStatusSyncService {
 
     private static final String ORDER_ITEM_REDIS_KEY_PREFIX = "order-item:";
 
-    @Autowired
-    private OrderItemRepository orderItemRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
+    private final OrderItemRepository orderItemRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     public void syncItemsWithOrderStatus(

@@ -1,6 +1,5 @@
 package com.app.services.imp;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -42,19 +41,16 @@ import java.util.HashMap;
 import java.util.Iterator;
 
 import org.modelmapper.ModelMapper;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class CategoryServiceImp implements CategoryService {
-    @Autowired
-    private CategoryRepository categoryRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
+    private final CategoryRepository categoryRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
 
     private LogContext getLogContext(String methodName, List<Integer> categoryIds) {
         return LogContext.builder()

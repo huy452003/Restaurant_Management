@@ -3,7 +3,6 @@ package com.app.utils;
 import java.util.Collections;
 import java.util.Objects;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -15,16 +14,19 @@ import com.handle_exceptions.UnauthorizedExceptionHandle;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import lombok.RequiredArgsConstructor;
+
 @Component
+@RequiredArgsConstructor
 public class UserEntityUtils {
 
-    @Autowired
-    private UserRepository userRepository;
+    private final UserRepository userRepository;
+    private final LoggingService log;
 
     // lấy user từ database by id 
     public UserEntity requireById(
         Integer userId, String modelName,
-        LogContext logContext, LoggingService log
+        LogContext logContext
     ) {
         if(userId != null) {
             return userRepository.findById(userId).orElseThrow(() -> {
@@ -42,7 +44,7 @@ public class UserEntityUtils {
     }
 
     // lấy user từ SecurityContextHolder (user đang đăng nhập)
-    public UserEntity requireAuthenticatedUser(String modelName, LogContext logContext, LoggingService log) {
+    public UserEntity requireAuthenticatedUser(String modelName, LogContext logContext) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         String username = authentication != null ? authentication.getName() : null;
         return userRepository.findByUsername(username).orElseThrow(() -> {
@@ -58,10 +60,10 @@ public class UserEntityUtils {
 
     // kiểm tra user hiện tại có phải là user đang đăng nhập không ( qua id )
     public UserEntity requireAuthenticatedUserById(
-        Integer userId, String modelName, LogContext logContext, LoggingService log
+        Integer userId, String modelName, LogContext logContext
     ) {
-        UserEntity currentUser = requireById(userId, modelName, logContext, log);
-        UserEntity authenticatedUser = requireAuthenticatedUser(modelName, logContext, log);
+        UserEntity currentUser = requireById(userId, modelName, logContext);
+        UserEntity authenticatedUser = requireAuthenticatedUser(modelName, logContext);
 
         if (!Objects.equals(currentUser.getId(), authenticatedUser.getId())) {
             UnauthorizedExceptionHandle e = new UnauthorizedExceptionHandle(

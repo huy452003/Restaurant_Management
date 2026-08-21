@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -22,21 +21,19 @@ import com.common.utils.FilterPageCacheFacade;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class TableStatusSyncServiceImp implements TableStatusSyncService {
 
     private static final String TABLE_REDIS_KEY_PREFIX = "table:";
 
-    @Autowired
-    private OrderRepository orderRepository;
-    @Autowired
-    private ReservationRepository reservationRepository;
-    @Autowired
-    private TableRepository tableRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private LoggingService log;
+    private final OrderRepository orderRepository;
+    private final ReservationRepository reservationRepository;
+    private final TableRepository tableRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName, Integer tableNumber) {
         return LogContext.builder()

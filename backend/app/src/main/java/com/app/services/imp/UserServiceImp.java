@@ -19,7 +19,6 @@ import java.util.stream.Collectors;
 import java.util.ArrayList;
 
 import org.modelmapper.ModelMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -69,35 +68,24 @@ import com.security.services.BlackListService;
 import com.security.services.JwtService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor    
 public class UserServiceImp implements UserService {
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private UserEntityUtils userEntityUtils;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
-    @Autowired
-    private JwtService jwtService;
-    @Autowired
-    private JwtConfig jwtConfig;
-    @Autowired
-    private AuthenticationManager authenticationManager;
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private BlackListService blackListService;
-    @Autowired
-    private PendingUserRegistrationStore pendingUserRegistrationStore;
-    @Autowired  
-    private EmailService emailService;
+    private final UserRepository userRepository;
+    private final UserEntityUtils userEntityUtils;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
+    private final JwtService jwtService;
+    private final JwtConfig jwtConfig;
+    private final AuthenticationManager authenticationManager;
+    private final PasswordEncoder passwordEncoder;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final BlackListService blackListService;
+    private final PendingUserRegistrationStore pendingUserRegistrationStore;
+    private final EmailService emailService;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds){
         return LogContext.builder()
@@ -255,7 +243,7 @@ public class UserServiceImp implements UserService {
         log.logInfo("User is logging out ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "userModel", logContext, log
+            "userModel", logContext
         );
 
         // thêm token vào blacklist (revoke token)
@@ -369,7 +357,7 @@ public class UserServiceImp implements UserService {
 
         // lấy user đang đăng nhập
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUserById(
-            userId, "UserModel", logContext, log
+            userId, "UserModel", logContext
         );
 
         update.setEmail(update.getEmail().toLowerCase().trim());
@@ -460,7 +448,7 @@ public class UserServiceImp implements UserService {
 
         // tìm các user có trong userIds
         List<UserEntity> foundUsers = userIds.stream()
-            .map(id -> userEntityUtils.requireById(id, "UserModel", logContext, log))
+            .map(id -> userEntityUtils.requireById(id, "UserModel", logContext))
             .collect(Collectors.toList());
 
         // Check nếu có user muốn update role thành ADMIN nhưng đã có ADMIN khác trong hệ thống
@@ -594,7 +582,7 @@ public class UserServiceImp implements UserService {
 
         // lấy user đang đăng nhập
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUserById(
-            userId, "UserModel", logContext, log
+            userId, "UserModel", logContext
         );
 
         // kiểm tra mật khẩu cũ phải giống với mật khẩu hiện tại

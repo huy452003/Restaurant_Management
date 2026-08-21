@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -12,7 +11,10 @@ import com.common.models.user.PendingUserRegistration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.security.configurations.JwtConfig;
 
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class PendingUserRegistrationStore {
 
     private static final String DATA_PREFIX = "user:registration:data:";
@@ -20,12 +22,9 @@ public class PendingUserRegistrationStore {
     private static final String IDX_USERNAME = "user:registration:idx:username:";
     private static final String IDX_PHONE = "user:registration:idx:phone:";
 
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private JwtConfig jwtConfig;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final JwtConfig jwtConfig;
 
     private Duration ttl() {
         return Duration.ofMillis(jwtConfig.verificationExpiration());

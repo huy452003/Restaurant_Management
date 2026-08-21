@@ -1,6 +1,5 @@
 package com.app.services.imp;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -50,6 +49,7 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -68,27 +68,18 @@ import java.util.function.Function;
 import org.modelmapper.ModelMapper;
 
 @Service
+@RequiredArgsConstructor
 public class ReservationServiceImp implements ReservationService {
-    @Autowired
-    private ReservationRepository reservationRepository;
-    @Autowired
-    private TableRepository tableRepository;
-    @Autowired
-    private OrderRepository orderRepository;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
-    @Autowired
-    private UserEntityUtils userEntityUtils;
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private TableStatusSyncService tableStatusSyncService;
+    private final ReservationRepository reservationRepository;
+    private final TableRepository tableRepository;
+    private final OrderRepository orderRepository;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
+    private final UserEntityUtils userEntityUtils;
+    private final UserRepository userRepository;
+    private final TableStatusSyncService tableStatusSyncService;
 
     private LogContext getLogContext(String methodName, List<Integer> reservationIds) {
         return LogContext.builder()
@@ -142,7 +133,7 @@ public class ReservationServiceImp implements ReservationService {
             tableNumber, reservationDate, reservationTime, numberOfGuests, reservationStatus
         );
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "ReservationModel", logContext, log
+            "ReservationModel", logContext
         );
         if (currentUser.getRole() == UserRole.CUSTOMER) {
             conditions.add(FilterCondition.eq("customerEmail", currentUser.getEmail()));
@@ -194,7 +185,7 @@ public class ReservationServiceImp implements ReservationService {
         log.logInfo("Creating reservations ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "ReservationModel", logContext, log
+            "ReservationModel", logContext
         );
 
         List<ReservationEntity> reservationEntities = reservations.stream().map(
@@ -252,7 +243,7 @@ public class ReservationServiceImp implements ReservationService {
         log.logInfo("Updating reservations ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "ReservationModel", logContext, log
+            "ReservationModel", logContext
         );
         ReservationEntity currentReservation = requireReservation(reservationId, logContext);
 
@@ -431,7 +422,7 @@ public class ReservationServiceImp implements ReservationService {
         log.logInfo("Cancelling reservation ...!", logContext);
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "ReservationModel", logContext, log
+            "ReservationModel", logContext
         );
         ReservationEntity foundReservation = requireReservation(reservationId, logContext);
 
@@ -472,7 +463,7 @@ public class ReservationServiceImp implements ReservationService {
     public ReservationAvailabilityModel getTimeSlotAvailability(Integer tableNumber, LocalDate date) {
         LogContext logContext = getLogContext("getTimeSlotAvailability", Collections.emptyList());
         
-        userEntityUtils.requireAuthenticatedUser("ReservationModel", logContext, log);
+        userEntityUtils.requireAuthenticatedUser("ReservationModel", logContext);
         
         if (tableNumber == null || tableNumber < 1) {
             ValidationExceptionHandle e = new ValidationExceptionHandle(

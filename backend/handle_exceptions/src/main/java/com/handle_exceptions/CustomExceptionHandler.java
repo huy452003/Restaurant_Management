@@ -6,7 +6,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import com.common.models.Response;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import java.util.Locale;
 
@@ -22,6 +21,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import jakarta.validation.ConstraintViolationException;
+import lombok.RequiredArgsConstructor;
+
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
@@ -36,11 +37,10 @@ import org.springframework.util.StringUtils;
 
 @RestControllerAdvice
 @Order(1) // Độ ưu tiên cao để catch DataIntegrityViolationException trước handler Exception tổng quát
+@RequiredArgsConstructor
 public class CustomExceptionHandler {
-    @Autowired
-    MessageSource messageSource;
-    @Autowired
-    private LocaleResolver localeResolver;
+    private final MessageSource messageSource;
+    private final LocaleResolver localeResolver;
 
     /** Giống DispatcherServlet: luôn đọc Accept-Language qua LocaleResolver, tránh rơi về Locale.getDefault() của JVM. */
     private Locale resolveLocale(HttpServletRequest request) {

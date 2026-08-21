@@ -2,7 +2,6 @@ package com.security.services;
 
 import java.util.HexFormat;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +10,7 @@ import com.security.configurations.JwtConfig;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import lombok.RequiredArgsConstructor;
 
 import java.util.*;
 import java.util.function.Function;
@@ -18,9 +18,9 @@ import java.util.function.Function;
 import javax.crypto.SecretKey;
 
 @Service
+@RequiredArgsConstructor
 public class JwtService {
-    @Autowired
-    private JwtConfig jwtConfig;
+    private final JwtConfig jwtConfig;
 
     // build token
     private String buildToken(Map<String, Object> claims, UserDetails userDetails, Long expiration){

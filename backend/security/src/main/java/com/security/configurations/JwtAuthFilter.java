@@ -1,6 +1,5 @@
 package com.security.configurations;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -25,22 +24,19 @@ import java.util.Collections;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import jakarta.servlet.FilterChain;
 
 @Component
+@RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
-    @Autowired
-    private JwtService jwtService;
-    @Autowired
-    private UserDetailsService userDetailsService;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private BlackListService blackListService;
+    private final JwtService jwtService;
+    private final UserDetailsService userDetailsService;
+    private final LoggingService log;
+    private final BlackListService blackListService;
 
-    @Autowired
     @Qualifier("handlerExceptionResolver")
-    private HandlerExceptionResolver handlerExceptionResolver;
+    private final HandlerExceptionResolver handlerExceptionResolver;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds) {
         return LogContext.builder()

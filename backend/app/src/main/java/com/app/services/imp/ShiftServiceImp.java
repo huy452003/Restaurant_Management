@@ -1,6 +1,5 @@
 package com.app.services.imp;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -34,6 +33,7 @@ import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import lombok.RequiredArgsConstructor;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -51,19 +51,14 @@ import java.util.function.Function;
 import org.modelmapper.ModelMapper;
 
 @Service
+@RequiredArgsConstructor
 public class ShiftServiceImp implements ShiftService {
-    @Autowired
-    private ShiftRepository shiftRepository;
-    @Autowired
-    private UserEntityUtils userEntityUtils;
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private ModelMapper modelMapper;
+    private final ShiftRepository shiftRepository;
+    private final UserEntityUtils userEntityUtils;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoggingService log;
+    private final ModelMapper modelMapper;
 
     private LogContext getLogContext(String methodName, List<Integer> shiftIds) {
         return LogContext.builder()
@@ -91,7 +86,7 @@ public class ShiftServiceImp implements ShiftService {
         );
 
         UserEntity currentUser = userEntityUtils.requireAuthenticatedUser(
-            "ShiftModel", logContext, log
+            "ShiftModel", logContext
         );
         if (
             currentUser.getRole() == UserRole.CASHIER
@@ -149,7 +144,7 @@ public class ShiftServiceImp implements ShiftService {
             .distinct()
             .collect(Collectors.toMap(
                 Function.identity(),
-                employeeId -> userEntityUtils.requireById(employeeId, "UserModel", logContext, log)
+                employeeId -> userEntityUtils.requireById(employeeId, "UserModel", logContext)
             ));
 
         validateRole(shifts, logContext);
@@ -258,7 +253,7 @@ public class ShiftServiceImp implements ShiftService {
                 modelMapper.map(update, current);
                 current.setEmployee(
                     userEntityUtils.requireById(
-                        update.getEmployeeId(), "UserModel", logContext, log)
+                        update.getEmployeeId(), "UserModel", logContext)
                     );
                 shiftsToUpdate.add(current);
             }
@@ -296,7 +291,7 @@ public class ShiftServiceImp implements ShiftService {
         List<Object> invalidFields = new ArrayList<>();
         for(ShiftModel shift : shifts) {
             UserEntity employee = userEntityUtils.requireById(
-                shift.getEmployeeId(), "UserModel", logContext, log
+                shift.getEmployeeId(), "UserModel", logContext
             );
             if(!Objects.equals(employee.getRole(), UserRole.MANAGER) &&
                !Objects.equals(employee.getRole(), UserRole.CASHIER)
