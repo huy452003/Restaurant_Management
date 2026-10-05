@@ -22,7 +22,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -39,16 +38,16 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/tables")
 public class TableController {
-    @Autowired
-    private TableService tableService;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private MessageSource messageSource;
+    private final TableService tableService;
+    private final LoggingService log;
+    private final MessageSource messageSource;
 
     private LogContext getLogContext(String methodName, List<Integer> tableIds) {
         return LogContext.builder()

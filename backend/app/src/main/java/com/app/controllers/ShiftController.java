@@ -7,7 +7,6 @@ import java.util.Locale;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -40,16 +39,16 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/shifts")
 public class ShiftController {
-    @Autowired
-    private ShiftService shiftService;
-    @Autowired
-    private MessageSource messageSource;
-    @Autowired
-    private LoggingService log;
+    private final ShiftService shiftService;
+    private final MessageSource messageSource;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName, List<Integer> shiftIds) {
         return LogContext.builder()

@@ -20,11 +20,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.MessageSource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.context.MessageSource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -35,16 +34,16 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/categories")
 public class CategoryController {
-    @Autowired
-    private CategoryService categoryService;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private MessageSource messageSource;
+    private final CategoryService categoryService;
+    private final LoggingService log;
+    private final MessageSource messageSource;
 
     private LogContext getLogContext(String methodName, List<Integer> categoryIds) {
         return LogContext.builder()

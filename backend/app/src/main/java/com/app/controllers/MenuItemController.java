@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -36,16 +35,16 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/menu-items")
 public class MenuItemController {
-    @Autowired
-    private MenuItemService menuItemService;
-    @Autowired
-    private MessageSource messageSource;
-    @Autowired
-    private LoggingService log;
+    private final MenuItemService menuItemService;
+    private final MessageSource messageSource;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName, List<Integer> menuItemIds) {
         return LogContext.builder()

@@ -3,7 +3,6 @@ package com.app.controllers;
 import java.io.IOException;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -28,17 +27,17 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/payments/vnpay")
 public class VnpayPaymentController {
 
-    @Autowired
-    private VnpayPaymentService vnpayPaymentService;
-    @Autowired
-    private MessageSource messageSource;
-    @Autowired
-    private LoggingService log;
+    private final VnpayPaymentService vnpayPaymentService;
+    private final MessageSource messageSource;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName) {
         return LogContext.builder()

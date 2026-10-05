@@ -1,6 +1,5 @@
 package com.app.schedulers;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -8,12 +7,13 @@ import com.app.services.OrderService;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import lombok.RequiredArgsConstructor;
+
 @Component
+@RequiredArgsConstructor
 public class OrderConfirmedUnpaidExpiryScheduler {
-    @Autowired
-    private OrderService orderService;
-    @Autowired
-    private LoggingService log;
+    private final OrderService orderService;
+    private final LoggingService log;
 
     // scheduler hủy đơn CONFIRMED chưa thanh toán đủ (DINE_IN + DELIVERY) và payment PENDING treo sau TTL
     @Scheduled(fixedRateString = "${order.confirmed.unpaid.expiry-check-interval-ms:60000}")

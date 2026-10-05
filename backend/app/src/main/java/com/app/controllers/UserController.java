@@ -5,7 +5,6 @@ import java.util.Locale;
 import java.time.LocalDate;
 import java.util.Collections;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -51,16 +50,16 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/users")
 public class UserController {
-    @Autowired
-    private UserService userService;
-    @Autowired
-    private MessageSource messageSource;
-    @Autowired
-    private LoggingService log;
+    private final UserService userService;
+    private final MessageSource messageSource;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName, List<Integer> userIds) {
         return LogContext.builder()

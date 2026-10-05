@@ -1,6 +1,5 @@
 package com.app.services;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
@@ -11,12 +10,13 @@ import org.springframework.stereotype.Service;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import lombok.RequiredArgsConstructor;
+
 @Service
+@RequiredArgsConstructor
 public class EmailService {
-    @Autowired
-    private JavaMailSender mailSender;
-    @Autowired
-    private LoggingService log;
+    private final JavaMailSender mailSender;
+    private final LoggingService log;
 
     @Value("${app.frontend-url:http://localhost:3000}")
     private String frontendUrl;

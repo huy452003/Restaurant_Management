@@ -1,6 +1,5 @@
 package com.app.schedulers;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -8,12 +7,13 @@ import com.app.services.OrderService;
 import com.logging.models.LogContext;
 import com.logging.services.LoggingService;
 
+import lombok.RequiredArgsConstructor;
+
 @Component
+@RequiredArgsConstructor
 public class OrderPendingExpiryScheduler {
-    @Autowired
-    private OrderService orderService;
-    @Autowired
-    private LoggingService log;
+    private final OrderService orderService;
+    private final LoggingService log;
 
     // scheduler hủy đơn PENDING quá hạn (giải phóng bàn cho giỏ hàng / đặt bàn khác)
     @Scheduled(fixedRateString = "${order.pending.expiry-check-interval-ms:60000}")

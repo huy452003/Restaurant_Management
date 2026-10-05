@@ -6,7 +6,6 @@ import java.util.Locale;
 
 import java.math.BigDecimal;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -46,16 +45,16 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/orders")
 public class OrderController {
-    @Autowired
-    private OrderService orderService;
-    @Autowired
-    private MessageSource messageSource;
-    @Autowired
-    private LoggingService log;
+    private final OrderService orderService;
+    private final MessageSource messageSource;
+    private final LoggingService log;
 
     private LogContext getLogContext(String methodName, List<Integer> orderIds) {
         return LogContext.builder()

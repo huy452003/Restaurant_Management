@@ -27,7 +27,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.data.domain.Page;
@@ -46,16 +45,16 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.validation.annotation.Validated;
 
+import lombok.RequiredArgsConstructor;
+
 @RestController
 @Validated
+@RequiredArgsConstructor
 @RequestMapping("/reservations")
 public class ReservationController {
-    @Autowired
-    private ReservationService reservationService;
-    @Autowired
-    private LoggingService log;
-    @Autowired
-    private MessageSource messageSource;
+    private final ReservationService reservationService;
+    private final LoggingService log;
+    private final MessageSource messageSource;
 
     private LogContext getLogContext(String methodName, List<Integer> reservationIds) {
         return LogContext.builder()
