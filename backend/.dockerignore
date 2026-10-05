@@ -6,3 +6,8 @@
 logs/
 **/node_modules/
 .DS_Store
+
+
+**/application-local.properties
+**/.env
+**/*.local
